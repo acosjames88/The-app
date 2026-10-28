@@ -3,11 +3,14 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
-    <application android:label="SNES Search &amp; Play" android:icon="@android:drawable/ic_media_play"
+    <uses-feature android:name="android.hardware.gamepad" android:required="false"/>
+    <application android:label="SNESLive TV" android:icon="@drawable/app_icon" android:banner="@drawable/tv_banner"
         android:allowBackup="false" android:usesCleartextTraffic="false"
+        android:hardwareAccelerated="true" android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize">
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

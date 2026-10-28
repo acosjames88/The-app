@@ -1,176 +1,417 @@
 package com.retrosearch.play;
 
 import android.app.Activity;
-import android.os.Bundle;
-import android.content.Context;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.graphics.Color;
+import android.hardware.input.InputManager;
 import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.CookieManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements InputManager.InputDeviceListener {
+    static final String CATALOG = "file:///android_asset/index.html";
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final InputRouter inputs = new InputRouter((button, down) ->
+        evaluate("window.SnesTV && SnesTV.button(" + button + "," + down + ")"));
     private FrameLayout root;
-    private LinearLayout playerPanel;
-    private WebView catalog;
-    private WebView player;
+    private LinearLayout playerPanel, toolbar;
+    WebView catalog, player;
+    private TextView status;
+    private Button playButton, remoteButton;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
+    private InputManager inputManager;
+    boolean gameMode;
+    private boolean alternateRemote, bridgeReady, pendingPlay, paused;
+    private long playDeadline;
+    private int navigation, navDirection;
+    private String playerScript = "";
 
-    @Override public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN);
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
+        try (InputStream stream = getAssets().open("player.js")) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096]; int n;
+            while ((n = stream.read(buffer)) != -1) bytes.write(buffer, 0, n);
+            playerScript = new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) { throw new IllegalStateException("Missing player asset", e); }
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(12, 15, 28));
+        root.setBackgroundColor(0xff0d1526);
         setContentView(root);
-
-        catalog = webview();
-        // The privileged bridge exists ONLY in the app's trusted, local catalog.
+        catalog = makeWebView(true);
         catalog.addJavascriptInterface(new CatalogBridge(), "SnesApp");
         root.addView(catalog, new FrameLayout.LayoutParams(-1, -1));
-        catalog.loadUrl("file:///android_asset/index.html");
+        catalog.loadUrl(CATALOG);
+        catalog.requestFocus();
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
+        inputManager.registerInputDeviceListener(this, handler);
     }
 
-    private WebView webview() {
+    static boolean allowedPlayerUrl(String value) {
+        if (value == null) return false;
+        try {
+        Uri u = Uri.parse(value);
+        String host = u.getHost();
+        return "https".equalsIgnoreCase(u.getScheme()) &&
+            ("sneslive.com".equalsIgnoreCase(host) || "www.sneslive.com".equalsIgnoreCase(host)) &&
+            u.getUserInfo() == null && (u.getPort() == -1 || u.getPort() == 443);
+        } catch (IllegalArgumentException invalid) { return false; }
+    }
+
+    private WebView makeWebView(boolean local) {
         WebView web = new WebView(this);
-        web.setBackgroundColor(Color.rgb(12, 15, 28));
-        web.setFocusable(true);
-        web.setFocusableInTouchMode(true);
+        web.setBackgroundColor(0xff0d1526);
+        web.setFocusable(true); web.setFocusableInTouchMode(true);
         WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
+        s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(false); s.setAllowContentAccess(false);
         s.setMediaPlaybackRequiresUserGesture(false);
-        s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(true);
-        s.setBuiltInZoomControls(false);
-        s.setDisplayZoomControls(false);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
-        web.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String scheme = request.getUrl().getScheme();
-                return !(scheme.equals("https") || scheme.equals("http") || scheme.equals("file"));
-            }
-        });
+        s.setUseWideViewPort(true); s.setLoadWithOverviewMode(true);
+        s.setBuiltInZoomControls(false); s.setDisplayZoomControls(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setSupportMultipleWindows(false);
+        if (local) {
+            s.setBlockNetworkLoads(true);
+            web.setWebViewClient(new WebViewClient() {
+                @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                    return !CATALOG.equals(r.getUrl().toString());
+                }
+                @Override public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                    return !CATALOG.equals(url);
+                }
+                @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                    if (r.getUrl().toString().startsWith("file:///android_asset/")) return null;
+                    return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
+                }
+            });
+        } else {
+            CookieManager.getInstance().setAcceptCookie(true);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+            web.setWebViewClient(new PlayerClient());
+        }
         return web;
     }
 
-    private class CatalogBridge {
+    private final class CatalogBridge {
         @JavascriptInterface public void play(String slug) {
             if (slug == null || !slug.matches("[a-z0-9-]{1,100}")) return;
             runOnUiThread(() -> openPlayer("https://sneslive.com/" + slug + "/"));
         }
         @JavascriptInterface public void searchAll(String query) {
+            if (query == null || query.length() > 200) return;
             runOnUiThread(() -> {
-                try {
-                    String q = URLEncoder.encode(query == null ? "" : query, "UTF-8");
-                    openPlayer("https://sneslive.com/?s=" + q);
-                } catch (Exception ignored) { openPlayer("https://sneslive.com/"); }
+                try { openPlayer("https://sneslive.com/?s=" + URLEncoder.encode(query.trim(), "UTF-8")); }
+                catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
             });
         }
+        @JavascriptInterface public void help() { runOnUiThread(() -> showHelp()); }
     }
 
-    private Button toolbarButton(String label, Runnable onTap) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextColor(Color.WHITE);
-        b.setAllCaps(false);
-        b.setTextSize(14);
-        b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(54,65,104)));
-        b.setOnClickListener(v -> onTap.run());
-        return b;
-    }
-
-    private void openPlayer(String url) {
-        if (!url.startsWith("https://sneslive.com/")) return;
-        if (playerPanel != null) {
-            if (player != null) player.loadUrl(url);
-            return;
+    private class PlayerClient extends WebViewClient {
+        @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            if (!request.isForMainFrame()) return false;
+            return blockNavigation(request.getUrl().toString());
         }
+        @Override public boolean shouldOverrideUrlLoading(WebView view, String url) { return blockNavigation(url); }
+        private boolean blockNavigation(String url) {
+            if (allowedPlayerUrl(url)) return false;
+            Toast.makeText(MainActivity.this, "External link blocked. Use Open browser to leave SNESLive.", Toast.LENGTH_SHORT).show();
+            return true;
+        }
+        @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+            navigation++; bridgeReady = false; setGameMode(false);
+            handler.removeCallbacks(pollPlayer);
+            setStatus("Loading SNESLive…");
+        }
+        @Override public void onPageFinished(WebView view, String url) {
+            if (view != player || !allowedPlayerUrl(url)) return;
+            int version = navigation;
+            view.evaluateJavascript(playerScript, ignored -> {
+                if (view != player || version != navigation) return;
+                bridgeReady = true;
+                handler.removeCallbacks(pollPlayer);
+                handler.post(pollPlayer);
+            });
+        }
+        @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
+            if (r.isForMainFrame()) fail("Page unavailable. Check internet, then Reload.");
+        }
+        @Override public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse e) {
+            if (r.isForMainFrame()) fail("SNESLive returned HTTP " + e.getStatusCode() + ". Try Reload or Open browser.");
+        }
+    }
+
+    private void fail(String message) {
+        pendingPlay = false; bridgeReady = false; setGameMode(false);
+        setStatus(message);
+        handler.removeCallbacks(pollPlayer);
+    }
+
+    void openPlayer(String url) {
+        if (!allowedPlayerUrl(url)) return;
+        if (playerPanel != null) { player.loadUrl(url); requestPlay(); return; }
         playerPanel = new LinearLayout(this);
         playerPanel.setOrientation(LinearLayout.VERTICAL);
-        playerPanel.setBackgroundColor(Color.rgb(12,15,28));
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setPadding(6, 4, 6, 4);
-        toolbar.setBackgroundColor(Color.rgb(25,29,49));
-        toolbar.addView(toolbarButton("‹ Games", this::showCatalog));
-        toolbar.addView(toolbarButton("↻ Reload", () -> { if (player != null) player.reload(); }));
-        TextView title = new TextView(this);
-        title.setText("SNES Search & Play");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
-        title.setPadding(16, 15, 0, 0);
-        toolbar.addView(title);
-        playerPanel.addView(toolbar, new LinearLayout.LayoutParams(-1, -2));
-
-        player = webview();
-        // No JavaScript bridge is exposed to external game pages.
+        toolbar = new LinearLayout(this);
+        toolbar.setPadding(dp(20), dp(4), dp(20), dp(4));
+        toolbar.setBackgroundColor(0xff192b44);
+        addButton("Games", this::showCatalog);
+        playButton = addButton("Start / Focus", this::requestPlay);
+        addButton("Reload", () -> { setGameMode(false); player.reload(); requestPlay(); });
+        remoteButton = addButton("Remote: face", () -> {
+            inputs.releaseAll(); alternateRemote = !alternateRemote;
+            remoteButton.setText(alternateRemote ? "Remote: extra" : "Remote: face");
+            Toast.makeText(this, alternateRemote ? "Center X · Rewind L · Forward R · Play Select" :
+                "Center B · Rewind Y · Forward A · Play Start", Toast.LENGTH_LONG).show();
+        });
+        addButton("Controls", this::showHelp);
+        addButton("Open browser", this::openBrowser);
+        playerPanel.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(60)));
+        status = new TextView(this);
+        status.setTextColor(0xffb7d2ea); status.setTextSize(13);
+        status.setPadding(dp(24), dp(5), dp(24), dp(5));
+        playerPanel.addView(status, new LinearLayout.LayoutParams(-1, -2));
+        player = makeWebView(false);
         player.setWebChromeClient(new WebChromeClient() {
             @Override public void onShowCustomView(View view, CustomViewCallback callback) {
                 if (fullscreenView != null) { callback.onCustomViewHidden(); return; }
-                fullscreenView = view;
-                fullscreenCallback = callback;
+                fullscreenView = view; fullscreenCallback = callback;
+                playerPanel.setVisibility(View.GONE);
                 root.addView(view, new FrameLayout.LayoutParams(-1, -1));
             }
             @Override public void onHideCustomView() { closeFullscreen(); }
         });
         playerPanel.addView(player, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(playerPanel, new FrameLayout.LayoutParams(-1,-1));
+        root.addView(playerPanel, new FrameLayout.LayoutParams(-1, -1));
         catalog.setVisibility(View.GONE);
         player.requestFocus();
-        player.loadUrl(url);
+        requestPlay(); player.loadUrl(url);
     }
 
+    private Button addButton(String label, Runnable action) {
+        Button b = new Button(this);
+        b.setText(label); b.setTextSize(12); b.setAllCaps(false);
+        b.setTextColor(Color.WHITE); b.setFocusable(true);
+        android.graphics.drawable.StateListDrawable background = new android.graphics.drawable.StateListDrawable();
+        background.addState(new int[]{android.R.attr.state_focused}, new android.graphics.drawable.ColorDrawable(0xff277d7c));
+        background.addState(new int[]{}, new android.graphics.drawable.ColorDrawable(0xff253b57));
+        b.setBackground(background);
+        b.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(0, -1, 1);
+        layout.setMargins(dp(3), 0, dp(3), 0);
+        toolbar.addView(b, layout);
+        return b;
+    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private void setStatus(String value) { if (status != null) status.setText(value); }
+    private void evaluate(String js) { if (player != null && bridgeReady) player.evaluateJavascript(js, null); }
+
+    private void requestPlay() {
+        pendingPlay = true; playDeadline = SystemClock.uptimeMillis() + 120000;
+        if (bridgeReady && !paused) { handler.removeCallbacks(pollPlayer); handler.post(pollPlayer); }
+    }
+    private final Runnable pollPlayer = new Runnable() {
+        @Override public void run() {
+            if (player == null || paused || !bridgeReady) return;
+            final int version = navigation;
+            WebView current = player;
+            String script = pendingPlay ? "SnesTV.start()" : "(SnesTV.ready() ? 'ready' : 'waiting')";
+            current.evaluateJavascript("window.SnesTV ? " + script + " : 'waiting'", answer -> {
+                if (current != player || version != navigation || paused) return;
+                if ("\"ready\"".equals(answer)) {
+                    if (pendingPlay) { pendingPlay = false; setGameMode(true); }
+                    else if (!gameMode) setStatus("Player ready. Select Start / Focus for game controls.");
+                } else if (pendingPlay && SystemClock.uptimeMillis() > playDeadline) {
+                    pendingPlay = false;
+                    setStatus("Player did not become ready. Use the page controls, Reload, or Open browser.");
+                    setGameMode(false);
+                } else if (pendingPlay) setStatus("Waiting for the site's player. Menu opens app controls.");
+                if (player != null) handler.postDelayed(this, 1000);
+            });
+        }
+    };
+
+    void setGameMode(boolean active) {
+        inputs.releaseAll(); stopNavigation();
+        if (active) pendingPlay = false;
+        gameMode = active;
+        evaluate("window.SnesTV && SnesTV.active(" + active + ")");
+        if (toolbar != null) toolbar.setVisibility(active ? View.GONE : View.VISIBLE);
+        if (status != null) status.setVisibility(active ? View.GONE : View.VISIBLE);
+        if (active && player != null) player.requestFocus();
+    }
+    private void showToolbar() {
+        pendingPlay = false;
+        closeFullscreen(); setGameMode(false);
+        if (playButton != null) playButton.requestFocus();
+    }
+    private void openBrowser() {
+        if (player == null || !allowedPlayerUrl(player.getUrl())) return;
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(player.getUrl()))); }
+        catch (ActivityNotFoundException e) { Toast.makeText(this, "No browser is installed", Toast.LENGTH_LONG).show(); }
+    }
+    private void showHelp() {
+        if (player != null) showToolbar();
+        new AlertDialog.Builder(this).setTitle("Controls")
+            .setMessage("Browse: D-pad / left stick to move; A / Cross / Center to select.\n\n" +
+                "Gamepad → SNES\nA / Cross → B\nB / Circle → A\nX / Square → Y\nY / Triangle → X\nLB / L1 → L; RB / R1 → R\nStart / Options → Start; View / Share → Select\n\n" +
+                "Fire remote: D-pad moves; Center → B; Rewind → Y; Forward → A; Play/Pause → Start.\n" +
+                "Menu → app controls. Switch Remote to extra for Center → X; Rewind → L; Forward → R; Play → Select.\n\n" +
+                "Back opens app controls, then returns to Games. After a pause, select Start / Focus to resume. " +
+                "Full gameplay requires a gamepad for simultaneous inputs. Home remains a system button.")
+            .setPositiveButton("OK", null).show();
+    }
     private void closeFullscreen() {
         if (fullscreenView == null) return;
-        root.removeView(fullscreenView);
-        fullscreenView = null;
-        if (fullscreenCallback != null) {
-            fullscreenCallback.onCustomViewHidden();
-            fullscreenCallback = null;
-        }
+        root.removeView(fullscreenView); fullscreenView = null;
+        if (playerPanel != null) playerPanel.setVisibility(View.VISIBLE);
+        WebChromeClient.CustomViewCallback cb = fullscreenCallback; fullscreenCallback = null;
+        if (cb != null) cb.onCustomViewHidden();
     }
-
-    private void showCatalog() {
-        closeFullscreen();
+    void showCatalog() {
+        setGameMode(false); closeFullscreen(); pendingPlay = false;
+        handler.removeCallbacks(pollPlayer); navigation++;
         if (player != null) {
             player.stopLoading();
-            player.loadUrl("about:blank");
-            player.destroy();
-            player = null;
+            ((ViewGroup) player.getParent()).removeView(player);
+            player.destroy(); player = null;
         }
-        if (playerPanel != null) {
-            root.removeView(playerPanel);
-            playerPanel = null;
-        }
-        catalog.setVisibility(View.VISIBLE);
-        catalog.requestFocus();
+        bridgeReady = false;
+        if (playerPanel != null) root.removeView(playerPanel);
+        playerPanel = null; toolbar = null; status = null; playButton = null;
+        catalog.setVisibility(View.VISIBLE); catalog.requestFocus();
+        catalog.evaluateJavascript("window.SnesCatalog && SnesCatalog.restoreFocus()", null);
     }
 
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        int key = event.getKeyCode(); boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+        if (event.getAction() != KeyEvent.ACTION_DOWN && event.getAction() != KeyEvent.ACTION_UP)
+            return super.dispatchKeyEvent(event);
+        if (key == KeyEvent.KEYCODE_MENU || key == KeyEvent.KEYCODE_BUTTON_MODE) {
+            if (down && event.getRepeatCount() == 0) { if (player != null) showToolbar(); else showHelp(); }
+            return true;
+        }
+        if (gameMode && player != null) {
+            int button = ControllerMapper.button(key, alternateRemote);
+            if (button >= 0) {
+                inputs.set(event.getDeviceId() + ":key:" + key, button, down);
+                return true;
+            }
+        } else {
+            if (key == KeyEvent.KEYCODE_BUTTON_A) {
+                KeyEvent center = new KeyEvent(event.getDownTime(), event.getEventTime(), event.getAction(),
+                    KeyEvent.KEYCODE_DPAD_CENTER, event.getRepeatCount(), 0, event.getDeviceId(), 0, 0, InputDevice.SOURCE_DPAD);
+                return super.dispatchKeyEvent(center);
+            }
+            if (key == KeyEvent.KEYCODE_BUTTON_B) {
+                if (!down) onBackPressed();
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if ((event.getSource() & InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK ||
+            event.getAction() != MotionEvent.ACTION_MOVE) return super.dispatchGenericMotionEvent(event);
+        InputDevice device = event.getDevice();
+        InputDevice.MotionRange range = device == null ? null : device.getMotionRange(MotionEvent.AXIS_X, event.getSource());
+        int mask = ControllerMapper.directions(event.getAxisValue(MotionEvent.AXIS_X), event.getAxisValue(MotionEvent.AXIS_Y),
+            event.getAxisValue(MotionEvent.AXIS_HAT_X), event.getAxisValue(MotionEvent.AXIS_HAT_Y), range == null ? 0 : range.getFlat());
+        if (gameMode) {
+            for (int button = 4; button <= 7; button++)
+                inputs.set(event.getDeviceId() + ":axis", button, (mask & (1 << button)) != 0);
+        } else {
+            int direction = (mask & 16) != 0 ? KeyEvent.KEYCODE_DPAD_UP : (mask & 32) != 0 ? KeyEvent.KEYCODE_DPAD_DOWN :
+                (mask & 64) != 0 ? KeyEvent.KEYCODE_DPAD_LEFT : (mask & 128) != 0 ? KeyEvent.KEYCODE_DPAD_RIGHT : 0;
+            if (direction != navDirection) {
+                stopNavigation(); navDirection = direction;
+                if (direction != 0) { navigate(direction); handler.postDelayed(repeatNavigation, 350); }
+            }
+        }
+        return true;
+    }
+    private void navigate(int key) {
+        if (player == null) {
+            String arrow = key == 19 ? "ArrowUp" : key == 20 ? "ArrowDown" : key == 21 ? "ArrowLeft" : "ArrowRight";
+            catalog.evaluateJavascript("window.SnesCatalog && SnesCatalog.move('" + arrow + "')", null);
+        } else {
+            View focus = getCurrentFocus();
+            if (focus == null) { if (playButton != null) playButton.requestFocus(); return; }
+            int direction = key == 19 ? View.FOCUS_UP : key == 20 ? View.FOCUS_DOWN : key == 21 ? View.FOCUS_LEFT : View.FOCUS_RIGHT;
+            View next = focus.focusSearch(direction);
+            if (next != null) next.requestFocus();
+        }
+    }
+    private final Runnable repeatNavigation = new Runnable() {
+        @Override public void run() { if (navDirection != 0) { navigate(navDirection); handler.postDelayed(this, 150); } }
+    };
+    private void stopNavigation() { navDirection = 0; handler.removeCallbacks(repeatNavigation); }
+    @Override public void onInputDeviceRemoved(int id) { inputs.releaseDevice(id); stopNavigation(); }
+    @Override public void onInputDeviceChanged(int id) { inputs.releaseDevice(id); }
+    @Override public void onInputDeviceAdded(int id) {}
+
     @Override public void onBackPressed() {
-        if (fullscreenView != null) closeFullscreen();
-        else if (playerPanel != null) {
-            if (player != null && player.canGoBack()) player.goBack();
-            else showCatalog();
-        } else super.onBackPressed();
+        if (fullscreenView != null || gameMode) showToolbar();
+        else if (player != null) showCatalog();
+        else super.onBackPressed();
+    }
+    @Override protected void onPause() {
+        paused = true; pendingPlay = false;
+        inputs.releaseAll(); stopNavigation(); handler.removeCallbacks(pollPlayer);
+        evaluate("window.SnesTV && SnesTV.suspend()"); setGameMode(false);
+        if (player != null) player.onPause();
+        catalog.onPause(); catalog.pauseTimers();
+        super.onPause();
+    }
+    @Override protected void onResume() {
+        super.onResume(); paused = false;
+        if (catalog != null) { catalog.resumeTimers(); catalog.onResume(); }
+        if (player != null) player.onResume();
+        if (bridgeReady) handler.post(pollPlayer);
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) { inputs.releaseAll(); stopNavigation(); evaluate("window.SnesTV && SnesTV.release()"); }
     }
     @Override protected void onDestroy() {
-        if (player != null) player.destroy();
-        if (catalog != null) catalog.destroy();
+        handler.removeCallbacksAndMessages(null); inputs.releaseAll();
+        if (inputManager != null) inputManager.unregisterInputDeviceListener(this);
+        closeFullscreen();
+        if (player != null) { ((ViewGroup) player.getParent()).removeView(player); player.destroy(); }
+        if (catalog != null) { root.removeView(catalog); catalog.destroy(); }
         super.onDestroy();
     }
 }

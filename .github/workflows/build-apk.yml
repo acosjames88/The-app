@@ -1,14 +1,17 @@
-name: Build APK
+name: Build and test Fire TV APK
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/fire-tv-search-controller-support']
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -18,22 +21,52 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Install Android build tools
+      - name: Install build SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build, unit tests, and lint
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Browser integration tests
         run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          test -n "$SDKMANAGER"
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
-      - name: Build installable debug APK
-        run: gradle --no-daemon :app:assembleDebug
-      - name: Upload APK for download
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          npm run test:web
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android 11 Activity and WebView tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: x86_64
+          profile: tv_1080p
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -t app/build/outputs/apk/debug/app-debug.apk
+            adb install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w com.retrosearch.play.test/com.retrosearch.play.SmokeInstrumentation | tee instrumentation-result.txt
+            grep -q 'INSTRUMENTATION_CODE: -1' instrumentation-result.txt
+      - name: Upload installable APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SNES-Search-Play-APK
+          name: SNESLive-TV-1.1.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 90
-      - name: Publish direct APK download
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create v1.0 app/build/outputs/apk/debug/app-debug.apk#SNES-Search-Play.apk --title "SNES Search & Play v1.0" --notes "Experimental Android and Fire TV APK. Requires internet access. No ROMs bundled."
+          retention-days: 30
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fire-TV-build-test-evidence
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            instrumentation-result.txt
+          retention-days: 30
