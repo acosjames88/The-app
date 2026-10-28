@@ -8,7 +8,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -19,7 +19,10 @@ jobs:
         with:
           gradle-version: '8.10.2'
       - name: Install Android build tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
       - name: Build installable debug APK
         run: gradle --no-daemon :app:assembleDebug
       - name: Upload APK for download
@@ -29,3 +32,8 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 90
+      - name: Publish direct APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0 app/build/outputs/apk/debug/app-debug.apk#SNES-Search-Play.apk --title "SNES Search & Play v1.0" --notes "Experimental Android and Fire TV APK. Requires internet access. No ROMs bundled."
