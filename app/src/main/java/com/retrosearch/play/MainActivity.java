@@ -367,6 +367,10 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         if (player == null) {
             String arrow = key == 19 ? "ArrowUp" : key == 20 ? "ArrowDown" : key == 21 ? "ArrowLeft" : "ArrowRight";
             catalog.evaluateJavascript("window.SnesCatalog && SnesCatalog.move('" + arrow + "')", null);
+        } else if (player.hasFocus()) {
+            long now = SystemClock.uptimeMillis();
+            player.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, key, 0));
+            player.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, key, 0));
         } else {
             View focus = getCurrentFocus();
             if (focus == null) { if (playButton != null) playButton.requestFocus(); return; }
@@ -399,7 +403,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     @Override protected void onResume() {
         super.onResume(); paused = false;
         if (catalog != null) { catalog.resumeTimers(); catalog.onResume(); }
-        if (player != null) player.onResume();
+        if (player != null) { player.onResume(); if (playButton != null) playButton.requestFocus(); }
         if (bridgeReady) handler.post(pollPlayer);
     }
     @Override public void onWindowFocusChanged(boolean focused) {

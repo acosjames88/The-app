@@ -53,7 +53,7 @@ jobs:
           script: |
             adb install -t app/build/outputs/apk/debug/app-debug.apk
             adb install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w com.retrosearch.play.test/com.retrosearch.play.SmokeInstrumentation | tee instrumentation-result.txt
+            adb shell am instrument -r -w com.retrosearch.play.test/com.retrosearch.play.SmokeInstrumentation | tee instrumentation-result.txt
             grep -q 'INSTRUMENTATION_CODE: -1' instrumentation-result.txt
       - name: Upload installable APK
         if: always()

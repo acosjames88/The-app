@@ -64,6 +64,8 @@ public class SmokeInstrumentation extends Instrumentation {
             check("true".equals(js(true, "document.activeElement.classList.contains('game')")), "initial TV focus is a game");
             sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);
             check("true".equals(js(true, "document.activeElement.dataset.slug==='nba-jam'")), "D-pad moves between games");
+            axis(.9f,0); axis(0,0);
+            check("true".equals(js(true, "document.activeElement.dataset.slug==='donkey-kong-country'")), "left stick browses catalog");
             js(true, "document.getElementById('search').value='Zelda';document.getElementById('search').dispatchEvent(new Event('input'));true");
             check("1".equals(js(true, "document.querySelectorAll('.game').length")), "local game search filters results");
             js(true, "SnesApp.play('super-mario-world');true");
@@ -97,6 +99,11 @@ public class SmokeInstrumentation extends Instrumentation {
             check("[[0,0,1],[0,0,0]]".equals(js(false,"events")), "disconnect releases game input");
             js(false,"events=[];true"); axis(.9f,0); axis(0,0);
             check("[[0,7,1],[0,7,0]]".equals(js(false,"events")), "left stick and neutral release reach WebView");
+            runOnMainSync(() -> { activity.setGameMode(false); activity.player.requestFocus(); });
+            js(false,"window.navKeys=[];document.addEventListener('keydown',e=>navKeys.push(e.key));SnesTV.focus();true");
+            axis(.9f,0); axis(0,0);
+            check("true".equals(js(false,"navKeys.includes('ArrowRight')")), "left stick navigates website outside game mode");
+            runOnMainSync(() -> activity.setGameMode(true));
             js(false,"events=[];EJS_emulator.gameManager.simulateInput(0,0,1);true");
             check("[]".equals(js(false,"events")), "duplicate browser gamepad input is gated in native game mode");
             key(21,true,71);
