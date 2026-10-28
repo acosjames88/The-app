@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SNES Search & Play</title>
+<style>
+:root{color-scheme:dark;--bg:#0c0f1c;--panel:#1a2036;--edge:#303b60;--text:#e8efff;--muted:#a1aac7;--accent:#64f0d0;--blue:#548ef8}
+*{box-sizing:border-box}html,body{min-height:100%;margin:0}body{font:16px system-ui,-apple-system,Roboto,Arial;background:radial-gradient(ellipse at 15% 0%,#202f58 0,#10182c 39%,var(--bg) 75%);color:var(--text)}
+main{max-width:1200px;margin:auto;padding:clamp(18px,4vw,48px)}
+header{display:flex;gap:16px;align-items:center;margin-bottom:28px}
+.logo{display:grid;place-items:center;width:64px;height:60px;border:2px solid #65edd0;border-radius:14px;background:#122e3e;color:#65edd0;font-size:32px;box-shadow:0 0 35px #44ffc022}
+h1{font-size:clamp(26px,4vw,43px);line-height:1;margin:0;font-weight:800;letter-spacing:-1px}
+.sub{color:var(--muted);font-size:14px;margin-top:8px}
+.hero{background:linear-gradient(110deg,#222e55,#172343);border:1px solid var(--edge);border-radius:18px;padding:clamp(18px,3vw,32px);margin-bottom:24px}
+.hero h2{margin:0 0 8px;font-size:clamp(22px,3vw,32px)}
+.hero p{color:#b7c2e1;margin:0 0 21px}
+.search{display:flex;gap:12px;flex-wrap:wrap}
+input{flex:1;min-width:220px;padding:16px 18px;font-size:19px;color:white;background:#0c1227;border:1px solid #556181;border-radius:11px;outline:none}
+button{border:0;border-radius:12px;padding:15px 21px;font-weight:750;font-size:16px;cursor:pointer;background:#273759;color:white;transition:background .15s,transform .15s}
+button:hover,button:focus{outline:3px solid var(--accent);outline-offset:2px;background:#35547d}
+.primary{background:var(--accent);color:#0b2630}.primary:hover,.primary:focus{background:#afffec;color:#061d28}
+.guide{font-size:13px;color:#99aac9;margin-top:16px}
+.nav{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:20px 0 15px}
+.nav h3{margin:0;font-size:22px}#count{color:#96a5c8;font-size:14px}
+.games{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.game{border:1px solid #364467;background:#1a243d;text-align:left;min-height:121px;padding:20px;display:flex;flex-direction:column;justify-content:space-between;gap:11px}
+.game b{font-size:17px;font-weight:750}.game .category{color:#b3c0de;font-size:12px}.game .cta{color:var(--accent);font-size:14px}
+.empty{display:none;padding:30px 0;color:#a6b0c7}
+footer{border-top:1px solid #2a3854;margin-top:34px;padding-top:20px;color:#8997b5;font-size:13px;line-height:1.6}
+@media(min-width:850px){.hero{padding:36px 43px}.games{grid-template-columns:repeat(4,1fr)}}
+</style></head>
+<body><main>
+<header><div class="logo" aria-hidden="true">▣</div><div><h1>SNES <span style="color:#64f0d0">Search & Play</span></h1><div class="sub">Explore classic 16-bit games · Android & Fire TV</div></div></header>
+<section class="hero">
+<h2>What do you want to play?</h2>
+<p>Search games here. Select a game to open its SNESLive player inside this app.</p>
+<div class="search"><input id="search" type="search" placeholder="Search Mario, Zelda, Kirby, Mortal Kombat…" autofocus autocomplete="off" aria-label="Search games"><button id="all" class="primary">Search All Games</button></div>
+<div class="guide">Select a game below to play • Fire TV: use your remote to type; a Bluetooth gamepad may be needed during gameplay</div>
+</section>
+<div class="nav"><h3 id="heading">Popular games</h3><span id="count"></span></div>
+<div id="games" class="games"></div>
+<div id="empty" class="empty">No matches in the featured list. Select <b>Search All Games</b> to search SNESLive's full online collection.</div>
+<footer>Game pages are loaded online from SNESLive. Games and ROMs are not included in this app. Internet access is required; availability, game controls and playback are controlled by the third-party site. This app is independent of SNESLive.</footer>
+</main>
+<script>
+const games=[
+['Super Mario World','super-mario-world','Platform'],
+['NBA Jam','nba-jam','Sports'],
+['Donkey Kong Country','donkey-kong-country','Platform'],
+['The Legend of Zelda: A Link to the Past','the-legend-of-zelda-a-link-to-the-past','Adventure'],
+['Super Mario Kart','super-mario-kart','Racing'],
+['Super Metroid','super-metroid','Adventure'],
+['Earthbound','earthbound','RPG'],
+['Kirby Super Star','kirby-super-star','Platform'],
+['Mortal Kombat 3','mortal-kombat-3','Fighting'],
+['Star Fox','star-fox','Action'],
+['Super Mario All-Stars','super-mario-all-stars','Platform'],
+['Donkey Kong Country 2','donkey-kong-country-2','Platform'],
+['Donkey Kong Country 3','donkey-kong-country-3','Platform'],
+['Super Punch-Out!!','super-punch-out','Sports'],
+['Dr. Mario','dr-mario','Puzzle'],
+['Killer Instinct','killer-instinct','Fighting'],
+['Mega Man X','mega-man-x','Action'],
+['Street Fighter II Turbo','street-fighter-ii-turbo','Fighting'],
+['Mortal Kombat II','mortal-kombat-ii','Fighting'],
+['Ultimate Mortal Kombat 3','ultimate-mortal-kombat-3','Fighting'],
+['Super Bomberman 4','super-bomberman-4','Arcade'],
+['Super Bomberman 5','super-bomberman-5','Arcade'],
+['Street Fighter Alpha 2','street-fighter-alpha-2','Fighting'],
+['Super Street Fighter II','super-street-fighter-ii-the-new-challengers','Fighting'],
+['Kirby’s Dream Land 3','kirbys-dream-land-3','Platform'],
+['Top Gear','top-gear','Racing'],
+['Top Gear 2','top-gear-2','Racing'],
+['F-ZERO','f-zero','Racing'],
+['Doom','doom','Shooter'],
+['The Lion King','the-lion-king','Platform'],
+['Disney’s Aladdin','disneys-aladdin','Platform'],
+['Batman Returns','batman-returns','Action'],
+['Sunset Riders','sunset-riders','Action'],
+['Tetris Attack','tetris-attack','Puzzle'],
+['Super Mario World 2: Yoshi’s Island','super-mario-world-2-yoshis-island','Platform'],
+['Contra III: The Alien Wars','contra-iii-the-alien-wars','Action'],
+['Zombies Ate My Neighbors','zombies-ate-my-neighbors','Action'],
+['Secret of Mana','secret-of-mana','RPG'],
+['Final Fight','final-fight','Action'],
+['Sim Ant','sim-ant','Strategy'],
+['Terranigma','terranigma','RPG'],
+['U.N. Squadron','u-n-squadron','Shooter'],
+['Robotrek','robotrek','RPG'],
+['Stargate','stargate','Action'],
+['Shadowrun','shadowrun','RPG'],
+['Magic Sword','magic-sword','Action'],
+['NBA Live 98','nba-live-98','Sports'],
+['Mighty Morphin Power Rangers','mighty-morphin-power-rangers','Action'],
+['Super Godzilla','super-godzilla','Strategy'],
+['Sim City','sim-city','Strategy'],
+['Mr. Do!','mr-do','Arcade'],
+['Super Smash TV','super-smash-tv','Shooter'],
+['Ken Griffey Jr. Presents Major League Baseball','ken-griffey-jr-presents-major-league-baseball','Sports'],
+['Sonic Wings','sonic-wings','Shooter'],
+['Goof Troop','goof-troop','Adventure'],
+['Jurassic Park','jurassic-park','Action'],
+['Wild Guns','wild-guns','Shooter']
+];
+const input=document.getElementById('search'),grid=document.getElementById('games');
+function openGame(slug){ if(window.SnesApp)SnesApp.play(slug); else location.href='https://sneslive.com/'+slug+'/' }
+function render(){
+ const q=input.value.trim().toLowerCase();
+ const found=games.filter(g=>(g[0]+' '+g[2]).toLowerCase().includes(q));
+ grid.replaceChildren();
+ for(const g of found){
+  const btn=document.createElement('button');
+  btn.className='game';
+  const category=document.createElement('span');category.className='category';category.textContent=g[2];
+  const name=document.createElement('b');name.textContent=g[0];
+  const cta=document.createElement('span');cta.className='cta';cta.textContent='▶ Play online';
+  btn.append(category,name,cta);btn.onclick=()=>openGame(g[1]);grid.append(btn);
+ }
+ document.getElementById('count').textContent=found.length+' games';
+ document.getElementById('heading').textContent=q?'Search results':'Popular games';
+ document.getElementById('empty').style.display=found.length?'none':'block';
+}
+document.getElementById('all').onclick=()=>{
+ const q=input.value.trim();
+ if(window.SnesApp)SnesApp.searchAll(q);
+ else location.href='https://sneslive.com/?s='+encodeURIComponent(q);
+};
+input.addEventListener('input',render);
+input.addEventListener('keydown',e=>{if(e.key==='Enter'){ e.preventDefault(); const q=input.value.trim();const matches=games.filter(g=>g[0].toLowerCase()===q.toLowerCase());if(matches.length===1)openGame(matches[0][1]);else document.getElementById('all').click();}});
+render();
+</script></body></html>
