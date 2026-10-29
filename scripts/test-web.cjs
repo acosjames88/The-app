@@ -59,6 +59,11 @@ catch (_) { playwright = require(process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES 
     await page.locator('#all').click();
     await page.evaluate(()=>SnesCatalog.cancelPending());
     check((await page.locator('#online-status').innerText()).includes('paused'),'paused searches can be retried');
+    await page.locator('#all').click();
+    const pendingSearch=await page.evaluate(()=>calls.at(-1));
+    await page.locator('.game').click();
+    await page.evaluate(c=>SnesCatalog.receiveSearch(c[3],c[1],1,[['Late result','late-result','Online game']],false,''),pendingSearch);
+    check((await page.locator('.game b').innerText()).includes('Zelda'),'choosing a game cancels an outstanding online search');
     await page.locator('#featured').click();
     check(await page.locator('.game').count()===57,'Featured restores offline catalog');
     await page.locator('#search').focus(); await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');

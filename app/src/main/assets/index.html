@@ -51,7 +51,7 @@ const games=window.SNES_GAMES;
 const input=document.getElementById('search'),grid=document.getElementById('games');
 const onlineStatus=document.getElementById('online-status'),pager=document.getElementById('pages');
 let requestId=0,onlinePage=0,onlineGames=null,busy=false;
-function openGame(slug){ if(window.SnesApp)SnesApp.play(slug); else location.href='https://sneslive.com/'+slug+'/' }
+function openGame(slug){ if(busy)cancelPending(); if(window.SnesApp)SnesApp.play(slug); else location.href='https://sneslive.com/'+slug+'/' }
 function render(){
  const q=normalize(input.value);
  const found=onlineGames===null?games.filter(g=>normalize(g[0]+' '+g[2]).includes(q)):onlineGames;
