@@ -17,7 +17,11 @@ final class GameSession {
         thread.start();
     }
     void button(int index, boolean down) {
-        buttons.updateAndGet(mask -> down ? mask | (1 << index) : mask & ~(1 << index));
+        int before, after;
+        do {
+            before = buttons.get();
+            after = down ? before | (1 << index) : before & ~(1 << index);
+        } while (!buttons.compareAndSet(before, after));
     }
     void pause(boolean value) { paused = value; if (value) buttons.set(0); }
     void stop() {

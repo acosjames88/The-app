@@ -79,7 +79,8 @@ final class RomRepository {
         String html = new String(fetcher.get(pageUrl, true), StandardCharsets.UTF_8);
         String rom = romFromPage(html, pageUrl);
         byte[] data = unpack(fetcher.get(rom, false));
-        File temp = new File(cache, slug + ".partial");
+        if (Thread.currentThread().isInterrupted()) throw new IOException("Game download canceled.");
+        File temp = File.createTempFile(slug + "-", ".partial", cache);
         try {
             try (FileOutputStream out = new FileOutputStream(temp)) { out.write(data); out.getFD().sync(); }
             if (!temp.renameTo(saved)) throw new IOException("The game could not be saved.");
@@ -156,11 +157,14 @@ final class RomRepository {
     }
     static List<GameCatalog.Game> parseSearch(String html) {
         List<GameCatalog.Game> result = new ArrayList<>();
-        Matcher articles = Pattern.compile("<article\\b[^>]*>(.*?)</article>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(html);
+        Matcher main = Pattern.compile("<main\\b[^>]*>(.*?)</main>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(html);
+        if (main.find()) html = main.group(1);
+        Matcher titles = Pattern.compile("<([a-z][a-z0-9]*)\\b[^>]*\\bclass\\s*=\\s*(['\"])[^'\"]*\\bgm-titl\\b[^'\"]*\\2[^>]*>(.*?)</\\1\\s*>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(html);
         java.util.HashSet<String> seen = new java.util.HashSet<>();
-        while (articles.find() && result.size() < 60) {
+        while (titles.find() && result.size() < 60) {
             Matcher links = Pattern.compile("<a\\b[^>]*href\\s*=\\s*(['\"])(https://(?:www\\.)?sneslive\\.com/([a-z0-9-]{1,100})/?)\\1[^>]*>(.*?)</a>",
-                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(articles.group(1));
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(titles.group(3));
             while (links.find()) {
                 String title = links.group(4).replaceAll("<[^>]+>", "").replaceAll("\\s+", " ").trim()
                     .replace("&amp;", "&").replace("&#8217;", "'").replace("&quot;", "\"").replace("&#039;", "'");

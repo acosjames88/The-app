@@ -65,6 +65,7 @@ public final class SmokeInstrumentation extends Instrumentation {
             while ((NativeCore.sram()[1] & 255) > 10 && guard++ < 40) { NativeCore.buttons(1 << 4); NativeCore.frame(pcm); }
             NativeCore.buttons(0); frames(5, pcm);
             check((NativeCore.sram()[2] & 255) >= 1, "actual game collects a star and increments score");
+            frames(30, pcm); // Let the star-collection beep stop before testing B.
             long beforeSound = NativeCore.stats()[4];
             NativeCore.buttons(1); boolean audible = false;
             for (int i = 0; i < 20; i++) {
@@ -72,7 +73,8 @@ public final class SmokeInstrumentation extends Instrumentation {
                 for (int p = 0; p < count; p++) if (pcm[p] != 0) audible = true;
             }
             NativeCore.buttons(0);
-            check(audible && NativeCore.stats()[4] > beforeSound, "SPC700 program generates nonzero stereo sound after B");
+            check(audible && NativeCore.stats()[4] > beforeSound && (NativeCore.sram()[3] & 0x80) != 0,
+                "SPC700 program generates nonzero stereo sound after B");
             NativeCore.save(); byte[] expected = NativeCore.sram();
             check(save.isFile() && Arrays.equals(expected, Files.readAllBytes(save.toPath())), "battery RAM is saved exactly");
             NativeCore.close();

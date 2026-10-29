@@ -74,7 +74,7 @@ public final class RomRepositoryTest {
             try { repo.file(bad); fail(); } catch(IllegalArgumentException expected) {}
     }
     @Test public void nativeSearchReturnsGameRowsAndNoAdLinks() {
-        String html = "<article><a href='https://ads.example/ad'>Ad</a><h2><a href='https://sneslive.com/game/'>Game &amp; Fun</a></h2></article>";
+        String html = "<div class='gm-titl'><a href='https://sneslive.com/sidebar/'>Sidebar</a></div><main class='main-cn'><a href='https://ads.example/ad'>Ad</a><h2 class='gm-titl'><a href='https://sneslive.com/game/'>Game &amp; Fun</a></h2><div class='gm-titl'><a href='https://ads.example/ad'>Ad</a></div></main>";
         assertEquals(1,RomRepository.parseSearch(html).size());
         assertEquals("Game & Fun",RomRepository.parseSearch(html).get(0).title);
     }

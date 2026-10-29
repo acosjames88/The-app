@@ -42,7 +42,7 @@ import java.util.concurrent.Future;
 /** Native TV catalog and SNES player. There is no browser component. */
 public class MainActivity extends Activity implements InputManager.InputDeviceListener {
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService downloads = Executors.newSingleThreadExecutor();
+    private final ExecutorService downloads = Executors.newFixedThreadPool(2);
     GameSession session;
     private final InputRouter inputs = new InputRouter((button, down) -> { if (session != null) session.button(button, down); });
     private FrameLayout root;
@@ -262,7 +262,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
                         String display = cursor.getString(0);
                         if (display != null && !display.trim().isEmpty()) title = display.replaceFirst("(?i)\\.(sfc|smc|zip)$", "");
                     }
-                }
+                } catch (Exception unavailableName) { /* The game remains usable without a provider label. */ }
                 getPreferences(MODE_PRIVATE).edit().putString(name.toString(), title).apply();
                 handler.post(() -> { if (serial == request && !destroyed) startGame(rom, name.toString()); });
             } catch (Exception e) { handler.post(() -> { if (serial == request && !destroyed) loadFailed(e.getMessage()); }); }
