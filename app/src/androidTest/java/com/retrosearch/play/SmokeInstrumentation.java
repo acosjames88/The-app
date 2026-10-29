@@ -34,7 +34,8 @@ public class SmokeInstrumentation extends Instrumentation {
             if ("true".equals(js(catalog, code))) return;
             SystemClock.sleep(200);
         }
-        throw new AssertionError("Timed out: " + code);
+        throw new AssertionError("Timed out: " + code + "; catalog=" + js(true,
+            "JSON.stringify({status:document.getElementById('online-status').textContent,heading:document.getElementById('heading').textContent,count:document.querySelectorAll('.game').length})"));
     }
     private void key(int code, boolean down, int device) {
         long now = SystemClock.uptimeMillis();
@@ -68,17 +69,15 @@ public class SmokeInstrumentation extends Instrumentation {
             check("true".equals(js(true, "document.activeElement.dataset.slug==='donkey-kong-country'")), "left stick browses catalog");
             js(true, "document.getElementById('search').value='Zelda';document.getElementById('search').dispatchEvent(new Event('input'));true");
             check("1".equals(js(true, "document.querySelectorAll('.game').length")), "local game search filters results");
-            js(true, "document.getElementById('search').value='Alien';document.getElementById('search').dispatchEvent(new Event('input'));document.getElementById('all').click();true");
-            long searchDeadline = SystemClock.uptimeMillis()+10000;
-            while (activity.searchWeb == null && SystemClock.uptimeMillis()<searchDeadline) SystemClock.sleep(20);
-            check(activity.searchWeb != null && activity.player == null, "online search stays in catalog instead of opening website");
             String searchFixture = "<!doctype html><html><body><main class='main-cn'><ul class='lst-gams cate-grid'>" +
                 "<li><div class='gm-titl'><a href='https://sneslive.com/alien-3/'>Alien 3</a>" +
                 "<a href='https://evil.test/escape/'>Unsafe</a></div></li></ul></main>" +
                 "<script>if(typeof SnesApp!=='undefined')document.querySelector('a').textContent='UNSAFE BRIDGE';</script></body></html>";
-            runOnMainSync(() -> { activity.searchWeb.stopLoading(); activity.searchWeb.loadDataWithBaseURL(
-                "https://sneslive.com/?s=Alien", searchFixture, "text/html", "UTF-8", null); });
+            runOnMainSync(() -> activity.searchLoader = (view,url) ->
+                view.loadDataWithBaseURL(url,searchFixture,"text/html","UTF-8",null));
+            js(true, "document.getElementById('search').value='Alien';document.getElementById('search').dispatchEvent(new Event('input'));document.getElementById('all').click();true");
             waitFor(true, "document.querySelectorAll('.game').length===1 && document.querySelector('.game').dataset.slug==='alien-3'");
+            check(activity.player == null, "online search stays in catalog instead of opening website");
             check("true".equals(js(true,"document.querySelector('.game b').textContent==='Alien 3'")), "search WebView has no privileged bridge and safely returns online results");
             check(activity.searchWeb == null, "search WebView is destroyed after delivering results");
             check("true".equals(js(true,"document.activeElement.dataset.slug==='alien-3'")), "online result receives TV focus");

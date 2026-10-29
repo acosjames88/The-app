@@ -59,6 +59,8 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     private String playerScript = "";
     private String searchScript = "";
     WebView searchWeb;
+    interface SearchLoader { void load(WebView view, String url); }
+    SearchLoader searchLoader = WebView::loadUrl;
     private int searchSerial;
     private Runnable searchTimeout;
 
@@ -210,7 +212,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         handler.postDelayed(searchTimeout, 30000);
         try {
             String path = page == 1 ? "/" : "/page/" + page + "/";
-            searchWeb.loadUrl("https://sneslive.com" + path + "?s=" + URLEncoder.encode(query,"UTF-8"));
+            searchLoader.load(searchWeb, "https://sneslive.com" + path + "?s=" + URLEncoder.encode(query,"UTF-8"));
         } catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
     }
 
