@@ -30,17 +30,23 @@ final class AdFreePlayer {
     }
 
     static boolean allowedAsset(String value) {
-        if (!siteUrl(value)) return false;
+        if (value == null) return false;
         try {
             URI uri = new URI(value);
+            boolean emulatorCdn = "https".equalsIgnoreCase(uri.getScheme()) &&
+                "cdn.emulatorjs.org".equalsIgnoreCase(uri.getHost()) && uri.getRawUserInfo() == null &&
+                (uri.getPort() == -1 || uri.getPort() == 443);
+            if (!siteUrl(value) && !emulatorCdn) return false;
             String path = uri.getPath();
             if (path == null || path.indexOf('\\') >= 0 || path.indexOf('%') >= 0 || path.indexOf('\0') >= 0 ||
                 path.contains("//") || uri.getRawFragment() != null) return false;
             for (String part : path.split("/")) if (part.equals(".") || part.equals("..")) return false;
-            if (path.startsWith("/emulator/data/")) {
+            boolean emulatorAsset = path.startsWith("/emulator/data/");
+            if (emulatorCdn) emulatorAsset = path.matches("/(stable|nightly|[0-9]+(?:\\.[0-9]+){1,3}(?:-beta)?)/data/.+");
+            if (emulatorAsset) {
                 return path.matches("(?i).+\\.(js|wasm|data|json|css|png|jpg|jpeg|webp|svg|ttf|woff|woff2|bin|zip|7z)$");
             }
-            return path.startsWith("/emulator/roms/") &&
+            return !emulatorCdn && path.startsWith("/emulator/roms/") &&
                 path.matches("(?i).+\\.(smc|sfc|fig|swc|bin|zip|7z)$");
         } catch (URISyntaxException invalid) { return false; }
     }
@@ -61,7 +67,7 @@ final class AdFreePlayer {
         try { rom = new URI(pageUrl).resolve(new URI(literal(source, "EJS_gameUrl"))); }
         catch (URISyntaxException invalid) { throw new IOException("Invalid game URL", invalid); }
         String romUrl = rom.toASCIIString();
-        if (!allowedAsset(romUrl) || !rom.getPath().startsWith("/emulator/roms/") || rom.getRawQuery() != null)
+        if (!siteUrl(romUrl) || !allowedAsset(romUrl) || !rom.getPath().startsWith("/emulator/roms/") || rom.getRawQuery() != null)
             throw new IOException("Invalid game asset");
         // No website HTML, scripts, ad URLs, or event handlers enter this document.
         String config = "window.EJS_player='#game';window.EJS_core='snes';" +

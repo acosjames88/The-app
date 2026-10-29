@@ -32,6 +32,14 @@ public class AdFreePlayerTest {
                 "https://sneslive.com:444/emulator/data/loader.js", "file:///emulator/data/loader.js"})
             assertFalse(url,AdFreePlayer.allowedAsset(url));
     }
+    @Test public void officialEmulatorFallbackIsAllowedWithoutOpeningOtherCdnPaths() {
+        assertTrue(AdFreePlayer.allowedAsset("https://cdn.emulatorjs.org/stable/data/version.json"));
+        assertTrue(AdFreePlayer.allowedAsset("https://cdn.emulatorjs.org/4.2.1/data/cores/snes9x-wasm.data"));
+        for(String url : new String[]{"https://cdn.emulatorjs.org/ads/promo.js",
+                "https://cdn.emulatorjs.org/stable/data/ad.html", "https://cdn.emulatorjs.org/emulator/roms/test.smc",
+                "https://cdn.emulatorjs.org.evil.test/stable/data/loader.js",
+                "http://cdn.emulatorjs.org/stable/data/loader.js"}) assertFalse(url,AdFreePlayer.allowedAsset(url));
+    }
     @Test public void traversalAndEncodedTraversalAreBlocked() {
         for (String path : new String[]{"/emulator/data/../ads.js", "/emulator/data/%2e%2e/ads.js",
                 "/emulator/data/%252e%252e/ads.js", "/emulator/data/%5cads.js", "/emulator/data//ads.js"})
