@@ -6,3 +6,8 @@ local.properties
 .idea/
 *.iml
 node_modules/
+
+vendor/
+app/src/main/assets/star-catcher.sfc
+app/src/main/assets/SNES9X-LICENSE.txt
+native-source.tar*

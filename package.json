@@ -1,6 +1,0 @@
-{
-  "name": "sneslive-tv-web-tests",
-  "private": true,
-  "scripts": {"test:web": "node scripts/test-web.cjs"},
-  "devDependencies": {"playwright": "1.62.1"}
-}

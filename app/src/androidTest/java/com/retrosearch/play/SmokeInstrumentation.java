@@ -1,161 +1,146 @@
 package com.retrosearch.play;
 
+import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
-import android.view.InputDevice;
 import android.view.KeyEvent;
-import android.view.MotionEvent;
+import android.view.PixelCopy;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
-/** Real Activity/WebView integration using a clearly synthetic emulator input sink. No ROM/gameplay test. */
-public class SmokeInstrumentation extends Instrumentation {
-    private MainActivity activity;
-    private int passed;
+/** Executes an actual original SNES ROM, then tests the native Activity and Surface. */
+public final class SmokeInstrumentation extends Instrumentation {
+    private int checks;
+    private void check(boolean result, String name) {
+        if (!result) throw new AssertionError(name);
+        checks++; System.out.println("PASS: " + name);
+    }
+    private void frames(int count, short[] pcm) { for (int i = 0; i < count; i++) check(NativeCore.frame(pcm) > 0, "ROM frame generates stereo PCM " + i); }
     @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
-    private void check(boolean condition, String name) {
-        if (!condition) throw new AssertionError(name);
-        passed++; Bundle b = new Bundle(); b.putString("stream", "PASS " + name + "\n"); sendStatus(0, b);
-    }
-    private String js(boolean catalog, String code) throws Exception {
-        CountDownLatch latch = new CountDownLatch(1); AtomicReference<String> value = new AtomicReference<>();
-        runOnMainSync(() -> (catalog ? activity.catalog : activity.player).evaluateJavascript(code, result -> {
-            value.set(result); latch.countDown();
-        }));
-        if (!latch.await(20, TimeUnit.SECONDS)) throw new AssertionError("JavaScript timed out: " + code);
-        return value.get();
-    }
-    private void waitFor(boolean catalog, String code) throws Exception {
-        long deadline = SystemClock.uptimeMillis() + 45000;
-        while (SystemClock.uptimeMillis() < deadline) {
-            if ("true".equals(js(catalog, code))) return;
-            SystemClock.sleep(200);
-        }
-        throw new AssertionError("Timed out: " + code + "; catalog=" + js(true,
-            "JSON.stringify({status:document.getElementById('online-status').textContent,heading:document.getElementById('heading').textContent,count:document.querySelectorAll('.game').length})"));
-    }
-    private void key(int code, boolean down, int device) {
-        long now = SystemClock.uptimeMillis();
-        runOnMainSync(() -> activity.dispatchKeyEvent(new KeyEvent(now, now,
-            down ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP, code, 0, 0, device, 0, 0, InputDevice.SOURCE_GAMEPAD)));
-    }
-    private void axis(float x, float y) {
-        runOnMainSync(() -> {
-            MotionEvent.PointerProperties p = new MotionEvent.PointerProperties(); p.id = 0;
-            MotionEvent.PointerCoords c = new MotionEvent.PointerCoords();
-            c.setAxisValue(MotionEvent.AXIS_X, x); c.setAxisValue(MotionEvent.AXIS_Y, y);
-            long now = SystemClock.uptimeMillis();
-            MotionEvent e = MotionEvent.obtain(now, now, MotionEvent.ACTION_MOVE, 1,
-                new MotionEvent.PointerProperties[]{p}, new MotionEvent.PointerCoords[]{c},
-                0, 0, 1, 1, 99, 0, InputDevice.SOURCE_JOYSTICK, 0);
-            activity.dispatchGenericMotionEvent(e); e.recycle();
-        });
-    }
-    private String asset(String name) throws Exception {
-        try (java.io.InputStream input=getTargetContext().getAssets().open(name)) {
-            java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();
-            byte[] buffer=new byte[4096];int n;
-            while((n=input.read(buffer))!=-1)bytes.write(buffer,0,n);
-            return new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.UTF_8);
-        }
-    }
     @Override public void onStart() {
         Bundle result = new Bundle();
+        Activity launched = null;
         try {
-            Intent launch = new Intent(Intent.ACTION_MAIN).setClassName(getTargetContext(), MainActivity.class.getName())
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            activity = (MainActivity) startActivitySync(launch);
-            waitFor(true, "!!window.SnesCatalog && document.querySelectorAll('.game').length>50");
-            check(true, "catalog loads offline in real Android WebView");
-            check("true".equals(js(true, "document.activeElement.classList.contains('game')")), "initial TV focus is a game");
-            sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);
-            check("true".equals(js(true, "document.activeElement.dataset.slug==='nba-jam'")), "D-pad moves between games");
-            axis(.9f,0); axis(0,0);
-            check("true".equals(js(true, "document.activeElement.dataset.slug==='donkey-kong-country'")), "left stick browses catalog");
-            js(true, "document.getElementById('search').value='Zelda';document.getElementById('search').dispatchEvent(new Event('input'));true");
-            check("1".equals(js(true, "document.querySelectorAll('.game').length")), "local game search filters results");
-            String searchFixture = "<!doctype html><html><body><main class='main-cn'><ul class='lst-gams cate-grid'>" +
-                "<li><div class='gm-titl'><a href='https://sneslive.com/alien-3/'>Alien 3</a>" +
-                "<a href='https://evil.test/escape/'>Unsafe</a></div></li></ul></main>" +
-                "<script>if(typeof SnesApp!=='undefined')document.querySelector('a').textContent='UNSAFE BRIDGE';</script></body></html>";
-            runOnMainSync(() -> activity.searchLoader = (view,url) ->
-                view.loadDataWithBaseURL(url,searchFixture,"text/html","UTF-8",null));
-            js(true, "document.getElementById('search').value='Alien';document.getElementById('search').dispatchEvent(new Event('input'));document.getElementById('all').click();true");
-            waitFor(true, "document.querySelectorAll('.game').length===1 && document.querySelector('.game').dataset.slug==='alien-3'");
-            check(activity.player == null, "online search stays in catalog instead of opening website");
-            check("true".equals(js(true,"document.querySelector('.game b').textContent==='Alien 3'")), "search WebView has no privileged bridge and safely returns online results");
-            check(activity.searchWeb == null, "search WebView is destroyed after delivering results");
-            check("true".equals(js(true,"document.activeElement.dataset.slug==='alien-3'")), "online result receives TV focus");
-            runOnMainSync(() -> activity.pageSource = (url,userAgent) -> "<html>Unavailable source: do not display this website</html>");
-            js(true, "SnesApp.play('super-mario-world');true");
-            long deadline = SystemClock.uptimeMillis()+15000;
-            while (activity.player == null && SystemClock.uptimeMillis()<deadline) SystemClock.sleep(100);
-            check(activity.player != null, "catalog selection opens native player directly");
-            waitFor(false,"!!document.getElementById('game') && document.getElementById('game').textContent.includes('Failed to download game')");
-            check("true".equals(js(false,"!document.body.textContent.includes('do not display this website')")), "missing game metadata fails closed without displaying original website");
-            check(MainActivity.allowedPlayerUrl("https://sneslive.com/super-mario-world/"), "SNESLive URL allowed");
-            check(!MainActivity.allowedPlayerUrl("https://sneslive.com.evil.test/") &&
-                !MainActivity.allowedPlayerUrl("https://sneslive.com@evil.test/") &&
-                !MainActivity.allowedPlayerUrl("file:///etc/passwd") &&
-                !MainActivity.allowedPlayerUrl("http://sneslive.com/"), "external and insecure URLs rejected");
-            String rawSource = "<script>EJS_core='snes';EJS_gameUrl='/emulator/roms/test.smc';</script>" +
-                "<iframe src='https://ads.example.test/video'></iframe><script>window.websiteExecuted=true;</script>";
-            String runtime = "<script>document.getElementById('game').innerHTML=\"<canvas width='256' height='224'></canvas>\";" +
-                "window.events=[];window.EJS_emulator={started:true,paused:false,gameManager:{simulateInput:function(p,i,v){events.push([p,i,v])}}," +
-                "pause:function(){this.paused=true},play:function(){this.paused=false}};</script>";
-            String fixture = AdFreePlayer.document(rawSource,"https://sneslive.com/synthetic-test/",asset("game.html"))
-                .replace("<script src=\"https://sneslive.com/emulator/data/loader.js\" onerror=\"playerDownloadFailed()\"></script>",runtime);
-            runOnMainSync(() -> { activity.player.stopLoading(); activity.player.loadDataWithBaseURL(
-                "https://sneslive.com/__synthetic_test__/", fixture, "text/html", "UTF-8", null); });
-            waitFor(false, "!!window.SnesTV && SnesTV.ready()");
-            check("true".equals(js(false,"EJS_AdUrl==='' && EJS_startOnLoaded===true && typeof websiteExecuted==='undefined' && !document.querySelector('iframe,video')")), "clean Android player starts without website scripts, ad frames or video");
-            check(!AdFreePlayer.allowedAsset("https://ads.cpmstar.com/video.js") &&
-                AdFreePlayer.allowedAsset("https://sneslive.com/emulator/data/loader.js"), "native player permits emulator assets and blocks advertising hosts");
-            runOnMainSync(() -> activity.setGameMode(true));
-            js(false, "events=[];true");
-            check("true".equals(js(false,"document.documentElement.classList.contains('snes-tv-playing')")), "native game mode enables full-screen player layout");
-            check("\"undefined\"".equals(js(false, "typeof SnesApp")), "external player has no privileged Android bridge");
-            int[] codes = {96,97,99,100,102,103,108,109,19,20,21,22,23,85,89,90};
-            int[] buttons = {0,8,1,9,10,11,3,2,4,5,6,7,0,3,1,8};
-            for (int i=0;i<codes.length;i++) {
-                js(false,"events=[];true"); key(codes[i],true,71); key(codes[i],false,71);
-                check(("[[0,"+buttons[i]+",1],[0,"+buttons[i]+",0]]").equals(js(false,"events")), "button mapping " + codes[i]);
+            byte[] rom;
+            try (InputStream in = getTargetContext().getAssets().open("star-catcher.sfc")) { rom = RomRepository.read(in, RomRepository.MAX_ROM); }
+            check(rom.length == 32768, "original bundled SNES ROM is 32 KiB");
+            RomRepository.validate(rom);
+            File saves = new File(getTargetContext().getFilesDir(), "native-test"); saves.mkdirs();
+            File save = new File(saves, "game.srm"); save.delete();
+            short[] pcm = new short[8192];
+            check(NativeCore.load(rom, save.getAbsolutePath()), "bundled native core loads actual SNES ROM");
+            check(NativeCore.fps() > 59 && NativeCore.fps() < 61, "NTSC timing");
+            check(NativeCore.sampleRate() == 32040, "SNES core reports expected audio rate");
+            frames(90, pcm);
+            long[] stats = NativeCore.stats();
+            check(stats[0] == 90 && stats[1] != 0 && stats[2] >= 256 && stats[3] >= 224, "real SNES video frames are rendered");
+            byte[] ram = NativeCore.sram();
+            check(ram.length >= 2048 && ram[0] == 15 && ram[1] == 15, "emulated 65816 CPU writes starting position into SRAM");
+            long initialHash = stats[1];
+            NativeCore.buttons(1 << 7); frames(30, pcm);
+            ram = NativeCore.sram();
+            check((ram[0] & 255) > 15 && (ram[3] & 1) != 0, "SNES joypad Right moves the actual emulated game");
+            check(NativeCore.stats()[1] != initialHash, "game movement changes real frame pixels");
+            NativeCore.buttons(0); int x = ram[0] & 255; frames(10, pcm);
+            check((NativeCore.sram()[0] & 255) == x, "released Right stops movement");
+            // Reach the initial star at 22,10 using the real core input callback.
+            int guard = 0;
+            while ((NativeCore.sram()[0] & 255) < 22 && guard++ < 30) { NativeCore.buttons(1 << 7); NativeCore.frame(pcm); }
+            NativeCore.buttons(0); NativeCore.frame(pcm);
+            guard = 0;
+            while ((NativeCore.sram()[1] & 255) > 10 && guard++ < 40) { NativeCore.buttons(1 << 4); NativeCore.frame(pcm); }
+            NativeCore.buttons(0); frames(5, pcm);
+            check((NativeCore.sram()[2] & 255) >= 1, "actual game collects a star and increments score");
+            long beforeSound = NativeCore.stats()[4];
+            NativeCore.buttons(1); boolean audible = false;
+            for (int i = 0; i < 20; i++) {
+                int count = NativeCore.frame(pcm);
+                for (int p = 0; p < count; p++) if (pcm[p] != 0) audible = true;
             }
-            check(activity.gameMode, "gamepad Start reaches game without opening toolbar");
-            js(false,"events=[];true"); key(96,true,71); key(96,true,72); key(96,false,71);
-            check("[[0,0,1]]".equals(js(false,"events")), "simultaneous sources remain held");
-            runOnMainSync(() -> activity.onInputDeviceRemoved(72));
-            check("[[0,0,1],[0,0,0]]".equals(js(false,"events")), "disconnect releases game input");
-            js(false,"events=[];true"); axis(.9f,0); axis(0,0);
-            check("[[0,7,1],[0,7,0]]".equals(js(false,"events")), "left stick and neutral release reach WebView");
-            runOnMainSync(() -> { activity.setGameMode(false); activity.player.requestFocus(); });
-            js(false,"window.navKeys=[];document.addEventListener('keydown',e=>navKeys.push(e.key));SnesTV.focus();true");
-            axis(.9f,0); axis(0,0);
-            check("true".equals(js(false,"navKeys.includes('ArrowRight')")), "left stick navigates website outside game mode");
-            runOnMainSync(() -> activity.setGameMode(true));
-            js(false,"events=[];EJS_emulator.gameManager.simulateInput(0,0,1);true");
-            check("[]".equals(js(false,"events")), "duplicate browser gamepad input is gated in native game mode");
-            key(21,true,71);
-            runOnMainSync(() -> { callActivityOnPause(activity); callActivityOnResume(activity); });
-            check("true".equals(js(false,"EJS_emulator.paused && events.some(e=>e[1]===6 && e[2]===0)")), "lifecycle pauses and releases held input");
-            runOnMainSync(() -> activity.setGameMode(true));
-            key(KeyEvent.KEYCODE_MENU,true,71);key(KeyEvent.KEYCODE_MENU,false,71);
-            check(!activity.gameMode, "Menu restores app controls");
-            runOnMainSync(() -> activity.onBackPressed());
-            check(activity.player == null, "Back returns to game catalog");
-            java.util.concurrent.atomic.AtomicBoolean settingsSafe = new java.util.concurrent.atomic.AtomicBoolean();
-            runOnMainSync(() -> settingsSafe.set(activity.catalog.getSettings().getBlockNetworkLoads() &&
-                !activity.catalog.getSettings().getAllowFileAccess()));
-            check(settingsSafe.get(), "privileged catalog blocks remote network and file access");
-            result.putString("stream", "PASS " + passed + " Android integration checks. Synthetic input fixture only; gameplay not tested.\n");
-            result.putInt("passed",passed); finish(ActivityResult.OK,result);
-        } catch (Throwable e) {
-            result.putString("stream", "FAIL after " + passed + " checks: " + android.util.Log.getStackTraceString(e));
-            finish(ActivityResult.FAIL,result);
+            NativeCore.buttons(0);
+            check(audible && NativeCore.stats()[4] > beforeSound, "SPC700 program generates nonzero stereo sound after B");
+            NativeCore.save(); byte[] expected = NativeCore.sram();
+            check(save.isFile() && Arrays.equals(expected, Files.readAllBytes(save.toPath())), "battery RAM is saved exactly");
+            NativeCore.close();
+            check(NativeCore.load(rom, save.getAbsolutePath()), "native core reopens a game");
+            check(Arrays.equals(expected, NativeCore.sram()), "saved SRAM is restored before execution");
+            NativeCore.close();
+
+            Intent intent = new Intent(getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            launched = startActivitySync(intent); waitForIdleSync();
+            MainActivity activity = (MainActivity) launched;
+            runOnMainSync(() -> check(noBrowser(activity.getWindow().getDecorView()), "native catalog has no browser"));
+            runOnMainSync(() -> activity.startGame(rom, "activity-test"));
+            long deadline = SystemClock.uptimeMillis() + 10000;
+            while (NativeCore.stats()[0] < 45 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100);
+            check(NativeCore.stats()[0] >= 45, "native Activity runs the bundled SNES game");
+            runOnMainSync(() -> check(noBrowser(activity.getWindow().getDecorView()), "game display has no browser"));
+            final SurfaceView[] surface = new SurfaceView[1];
+            runOnMainSync(() -> surface[0] = findSurface(activity.getWindow().getDecorView()));
+            check(surface[0] != null, "native SurfaceView displays game");
+            Bitmap bitmap = Bitmap.createBitmap(surface[0].getWidth(), surface[0].getHeight(), Bitmap.Config.ARGB_8888);
+            CountDownLatch copied = new CountDownLatch(1); int[] copyStatus = {-1};
+            PixelCopy.request(surface[0], bitmap, status -> { copyStatus[0] = status; copied.countDown(); }, new Handler(Looper.getMainLooper()));
+            check(copied.await(5, TimeUnit.SECONDS) && copyStatus[0] == PixelCopy.SUCCESS, "displayed Surface pixels are captured");
+            HashSet<Integer> colors = new HashSet<>();
+            for (int y = 0; y < bitmap.getHeight(); y += 4)
+                for (int xx = 0; xx < bitmap.getWidth(); xx += 4) colors.add(bitmap.getPixel(xx, y));
+            check(colors.size() >= 4, "actual displayed game has background, text, player, and star pixels");
+            try (FileOutputStream out = new FileOutputStream(new File(getTargetContext().getFilesDir(), "native-gameplay.png"))) {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            }
+            bitmap.recycle();
+            x = NativeCore.sram()[0] & 255;
+            runOnMainSync(() -> activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)));
+            SystemClock.sleep(300);
+            runOnMainSync(() -> activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT)));
+            check((NativeCore.sram()[0] & 255) > x, "Activity routes physical D-pad input to the SNES CPU");
+            runOnMainSync(activity::onBackPressed); SystemClock.sleep(100);
+            long pausedFrames = NativeCore.stats()[0]; SystemClock.sleep(150);
+            check(NativeCore.stats()[0] == pausedFrames, "Back pauses actual SNES execution");
+            runOnMainSync(activity::showGames); waitForIdleSync();
+            check(activity.session == null && NativeCore.sram().length == 0, "Games stops and unloads the native core");
+            runOnMainSync(() -> activity.startGame(rom, "activity-test"));
+            deadline = SystemClock.uptimeMillis() + 5000;
+            while (NativeCore.stats()[0] < 20 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100);
+            check(NativeCore.stats()[0] >= 20 && activity.session != null, "a second game session starts cleanly");
+            runOnMainSync(activity::showGames); waitForIdleSync();
+            result.putString("stream", "\nPASS: " + checks + " checks; real SNES CPU, video, movement, scoring, nonzero audio, battery saves, native Surface, pause, and restart.\nPhysical Fire TV, Bluetooth pairing, and commercial game compatibility are unverified.\n");
+            finish(Activity.RESULT_OK, result);
+        } catch (Throwable failure) {
+            try { NativeCore.close(); } catch (Throwable ignored) {}
+            result.putString("stream", "\nFAIL after " + checks + " checks: " + android.util.Log.getStackTraceString(failure));
+            finish(Activity.RESULT_CANCELED, result);
+        } finally {
+            if (launched != null) { Activity end = launched; runOnMainSync(end::finish); }
         }
     }
-    private static final class ActivityResult { static final int OK=-1, FAIL=0; }
+    private boolean noBrowser(View view) {
+        if (view.getClass().getName().startsWith("android.webkit.")) return false;
+        if (view instanceof ViewGroup) for (int i = 0; i < ((ViewGroup)view).getChildCount(); i++)
+            if (!noBrowser(((ViewGroup)view).getChildAt(i))) return false;
+        return true;
+    }
+    private SurfaceView findSurface(View view) {
+        if (view instanceof SurfaceView) return (SurfaceView)view;
+        if (view instanceof ViewGroup) for (int i = 0; i < ((ViewGroup)view).getChildCount(); i++) {
+            SurfaceView found = findSurface(((ViewGroup)view).getChildAt(i)); if (found != null) return found;
+        }
+        return null;
+    }
 }
+

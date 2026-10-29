@@ -1,91 +1,60 @@
-# SNESLive TV Search & Play
+# SNESLive TV 2.0 — Native select & play
 
-Android TV / Fire TV WebView application with a searchable 57-game featured catalog and in-app search of SNESLive's full collection. Selecting a game opens an app-owned, full-screen player with automatic emulator startup. The website's advertising page, banners, and video pre-roll are excluded. No ROMs or emulator binaries are bundled.
+Select a game and play it full screen. The catalog and player are native Android views. There is no WebView, website screen, advertisement, JavaScript engine, emulator download, or external browser handoff.
 
-Designed for Fire TV Stick 4K Max (2nd Gen, AFTKRT), Fire OS 8 / Android 11 / API 30. This is a universal Java APK with no ABI-specific native libraries and no Google Play Services dependency. Hardware compatibility and gameplay need confirmation on a physical Fire TV. Build success, synthetic input tests, and a loaded web page do not establish working gameplay.
+The APK bundles Snes9x 2005 for armeabi-v7a, arm64-v8a, and x86_64. Version 2.0.0 (code 5), package com.retrosearch.play, minimum Android 6/API 23, target API 35. Designed for Fire TV Stick 4K Max 2nd Gen / Fire OS 8. No Google Play Services dependency.
 
-## Build
+## Games
 
-Use JDK 17, Android SDK platform 35, and build tools 35.0.0. The wrapper pins Gradle 8.10.2 and verifies its distribution checksum; Android Gradle Plugin is 8.7.3.
+- **Star Catcher** is an original, public-domain SNES homebrew game bundled for immediate offline play. Move with the D-pad, collect yellow stars, and press SNES B for a tone. Its 65816 CPU program, graphics, SPC700 sound program, and ROM generator are in scripts/make-homebrew.py.
+- Choose a catalog title to download its game data directly into the app and run it in the bundled native core. Downloaded games are cached for offline play. Availability depends on the source server; the app cannot make a missing game file available.
+- **Import game** opens Android's file picker for .sfc, .smc, and ZIP files. Fire TV needs a file picker installed for this action. Only use games you have permission to access.
+- ZIP contents are read in memory with size limits, never extracted to arbitrary filesystem paths.
+- Battery-backed save RAM is saved automatically when the game pauses or closes. This version does not implement emulator save states.
 
-```sh
-export ANDROID_HOME=/path/to/android-sdk
-./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
-```
-
-Installable output: `app/build/outputs/apk/debug/app-debug.apk`. Version 1.3.0 (code 4), package `com.retrosearch.play`, min SDK 23, target SDK 35. The APK is debug-signed for sideload testing.
+No commercial ROM is bundled. Online game metadata is parsed as text; website scripts and advertising are never executed or displayed. Only validated HTTPS game-file addresses on the configured source hosts are accepted. HTML responses and invalid or oversized ROM/archive files are rejected before emulation. Errors are native dialogs; there is no webpage fallback.
 
 ## Controls
 
-In the catalog, D-pad / left stick moves focus; Center / Xbox A / PlayStation Cross selects. Search filters the local list immediately. Enter with one result opens that game; with multiple results it focuses the choices. Search all games brings online results and page controls into the app catalog.
+| Xbox | PlayStation | SNES |
+| --- | --- | --- |
+| A | Cross | B |
+| B | Circle | A |
+| X | Square | Y |
+| Y | Triangle | X |
+| LB / RB | L1 / R1 | L / R |
+| Start / View | Options / Share | Start / Select |
+| D-pad / left stick | D-pad / left stick | Move |
 
-| Input | SNES button |
-| --- | --- |
-| Xbox A / PlayStation Cross | B |
-| Xbox B / PlayStation Circle | A |
-| Xbox X / PlayStation Square | Y |
-| Xbox Y / PlayStation Triangle | X |
-| LB / L1; RB / R1 | L; R |
-| Start / Options; View / Share | Start; Select |
-| D-pad / left stick | Direction pad |
-| Remote Center; Rewind; Fast Forward; Play/Pause | B; Y; A; Start |
-| Remote extra bank: Center; Rewind; Fast Forward; Play/Pause | X; L; R; Select |
+Remote: D-pad moves; Center = B, Rewind = Y, Fast Forward = A, Play/Pause = Start. Menu opens native pause controls and switches the remote bank to X / L / R / Select. Back pauses; choose Games to return to the catalog. A gamepad supports full simultaneous input. Input is merged across physical sources, and released on pause, focus loss, and disconnect.
 
-Menu opens the app toolbar. The Remote button switches banks. Back first opens the toolbar, then returns to Games. Home remains a system button. Select Start / Focus to resume after leaving the app. A gamepad is needed for full simultaneous input; the Fire remote has limited buttons.
+## Build
 
-Controller input uses Android's standard button positions, independent of the controller name. D-pad key and hat events and left-stick movement are handled, with a deadzone, duplicate-event merging, and release on focus loss, pause, and disconnect. The app sends SNES input IDs to the live EmulatorJS input API; browser gamepad input is gated while native controls are active to avoid duplicate presses. Leaving native game mode restores the emulator's original input handler.
+Use JDK 17, Android SDK 35, NDK 27.2.12479018, and Gradle 8.10.2.
 
-## Test
+1. Run bash scripts/prepare-core.sh. This checks out the exact Snes9x 2005 revision a79dfe9047e7fec58808aefe48ad2bf499c7af11, copies the upstream notices, and generates the original homebrew ROM.
+2. Run gradle :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug.
+3. The APK is app/build/outputs/apk/debug/app-debug.apk.
+4. Run python3 scripts/verify-apk.py app/build/outputs/apk/debug/app-debug.apk to check native cores, offline ROM, notices, and absence of any browser/runtime assets.
 
-`./gradlew :app:testDebugUnitTest :app:lintDebug` runs controller and ad-free player unit tests plus Android lint. Player tests verify metadata extraction, URL validation, advertising exclusion, and failure behavior.
+The workflow uploads the installable APK, test results, and a corresponding-source archive containing the app plus the exact native core sources. Snes9x's upstream copyright and noncommercial distribution terms are included in the APK and available under Controls / About → Licenses. Core source: https://github.com/libretro/snes9x2005/tree/a79dfe9047e7fec58808aefe48ad2bf499c7af11 . The core is unmodified; it is compiled with the Blargg APU enabled. The original Star Catcher code and ROM are CC0.
 
-The browser suite checks catalog search, TV focus, the actual game-only template, advertising request rejection by its content policy, download errors, Start activation, duplicate suppression, and release/resume against a synthetic input sink:
+## Verification scope
 
-```sh
-npm install
-npx playwright install chromium
-npm run test:web
-```
+The Android instrumentation test executes the original SNES ROM in the actual bundled native core. It checks CPU-written SRAM, movement, star collection, changed video pixels, nonzero SPC700-generated PCM, save RAM persistence, the native Activity's Surface pixels, controller routing, pause, and a second game session. It does not substitute a JavaScript input fixture for a game.
 
-For Android 11 Activity/WebView integration on an emulator or connected test device:
+The GitHub workflow also runs JVM controller/repository tests, Android lint, and APK packaging checks. See the linked run for actual results; this README does not itself claim they passed.
 
-```sh
-./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
-adb install -r -t app/build/outputs/apk/debug/app-debug.apk
-adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w com.retrosearch.play.test/com.retrosearch.play.SmokeInstrumentation
-```
+Actual Fire TV hardware, sustained performance, sound at physical speakers, Bluetooth Xbox/PlayStation pairing, and compatibility of individual third-party games require hardware checks. Android emulator results do not establish those.
 
-The integration test launches the real Activity and WebView, then uses an explicitly synthetic EmulatorJS fixture. It does not run a ROM or prove gameplay. The GitHub workflow builds, runs unit tests and lint, attempts Android 11 integration, and saves the APK and test evidence separately.
+## Sideload
 
-## Fire TV installation and remaining hardware checks
+The APK is debug-signed for personal sideload testing:
 
-Enable ADB debugging on the Fire TV, connect it to your computer, then run:
-
-```sh
 adb connect FIRE_TV_IP:5555
 adb install -r app-debug.apk
-adb shell monkey -p com.retrosearch.play -c android.intent.category.LEANBACK_LAUNCHER 1
-```
 
-If installation reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, an older copy has a different signing key. Uninstalling that copy permits installation but deletes its app data. This testing build does not use an Appstore production signing key.
+An update signed by a different key may require removal of the installed copy; that deletes its app data. GitHub runner debug keys are not stable production signing keys.
 
-Confirm the TV launcher tile and banner, remote-only search/navigation, live player start, audio, game movement, face/shoulder buttons, Start/Select, diagonals and simultaneous inputs. Pair and test Xbox and PlayStation controllers separately; check reconnection, Back/Menu/Home, sleep/resume, and at least 15 minutes of play. These checks require the actual hardware.
+Independent project, not affiliated with Amazon, Nintendo, SNESLive, Microsoft, or Sony.
 
-## Network and trust boundary
-
-The catalog is local and works offline; online playback requires SNESLive's game metadata and emulator assets, a compatible WebView, and internet access. Site changes or unavailable assets can prevent loading.
-
-The native player reads the game page as data and copies only a validated SNES ROM URL into the bundled `game.html` template. It never executes the original page's HTML or scripts. Emulator advertisements are disabled. The player accepts only HTTPS emulator assets under `/emulator/data/` and ROM files under `/emulator/roms/` on the two exact SNESLive hosts, plus versioned runtime assets from the official EmulatorJS CDN for core-download fallback. Advertising hosts, unrelated first-party resources, frames, videos, and external navigation are blocked by both native request filtering and the document's content policy. If metadata or a download is unavailable, the app shows an error and Games/Reload controls.
-
-The local catalog's Android bridge is isolated from network navigation. The game-only document and temporary search WebView have no Android JavaScript bridge; file access is disabled and cleartext/mixed content is blocked. The hidden search WebView reads main-document links while blocking all subresources, and is destroyed after returning results. Third-party cookies are disabled. The in-app browser fallback was removed to keep game launches inside the ad-free flow.
-
-Independent project; not affiliated with SNESLive, Amazon, Nintendo, Microsoft, or Sony. Use games you have permission to access.
-
-Device reference: https://developer.amazon.com/docs/device-specs/device-specifications-fire-tv-streaming-media-player.html
-
-## Version 1.3.0 — No ads
-
-Game launches use a clean emulator document with direct startup instead of the website page and its pre-roll. Full-collection search, featured games, remote navigation, Xbox/PlayStation mappings, lifecycle handling, and full-screen layout are retained. Startup polling activates a visible emulator Start button at most once. Missing metadata and failed downloads show an app error.
-
-The app and its synthetic tests do not prove live gameplay. In the October 28, 2026 cloud-browser check, Super Mario World reached the emulator but failed with a WebGL context error (GLctx). This does not establish Fire TV behavior. Physical Fire TV playback, audio, performance, and Bluetooth controller pairing remain unverified. No ROMs or emulator binaries are included.

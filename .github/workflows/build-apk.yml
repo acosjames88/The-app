@@ -1,13 +1,11 @@
-name: Build and test Fire TV APK
+name: Build and test native Fire TV APK
 on:
   push:
     branches: [main, 'codex/fire-tv-search-controller-support']
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,28 +19,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Install build SDK
+      - name: Prepare pinned native core and original homebrew game
+        run: bash scripts/prepare-core.sh
+      - name: Install build SDK and NDK
         run: |
           sdk_manager="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
           test -x "$sdk_manager"
-          "$sdk_manager" 'platforms;android-35' 'build-tools;35.0.0'
+          "$sdk_manager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
       - name: Build, unit tests, and lint
         run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Browser integration tests
-        run: |
-          npm ci --ignore-scripts
-          npx playwright install --with-deps chromium
-          npm run test:web
+      - name: Verify no browser and bundled ARM cores
+        run: python3 scripts/verify-apk.py app/build/outputs/apk/debug/app-debug.apk
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Android 11 Activity and WebView tests
+      - name: Real SNES emulation and native Activity tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -55,21 +48,31 @@ jobs:
             adb install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -r -w com.retrosearch.play.test/com.retrosearch.play.SmokeInstrumentation | tee instrumentation-result.txt
             grep -q 'INSTRUMENTATION_CODE: -1' instrumentation-result.txt
+            adb exec-out run-as com.retrosearch.play cat files/native-gameplay.png > native-gameplay.png
+      - name: Package reproducible native source
+        if: always()
+        run: |
+          git archive HEAD > native-source.tar
+          tar --exclude='.git' -rf native-source.tar vendor/snes9x2005
+          gzip native-source.tar
       - name: Upload installable APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SNESLive-TV-1.3.0-NoAds-APK
+          name: SNESLive-TV-2.0.0-Native-NoAds-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Upload test evidence
+      - name: Upload test evidence and corresponding source
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Fire-TV-build-test-evidence
+          name: Native-Fire-TV-test-evidence-and-source
           path: |
             app/build/reports/
             app/build/test-results/
             instrumentation-result.txt
+            native-gameplay.png
+            native-source.tar.gz
           retention-days: 30
+
