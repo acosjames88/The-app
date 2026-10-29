@@ -35,6 +35,9 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONException;
 
 public class MainActivity extends Activity implements InputManager.InputDeviceListener {
     static final String CATALOG = "file:///android_asset/index.html";
@@ -54,18 +57,18 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     private long playDeadline;
     private int navigation, navDirection;
     private String playerScript = "";
+    private String searchScript = "";
+    WebView searchWeb;
+    private int searchSerial;
+    private Runnable searchTimeout;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN);
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
-        try (InputStream stream = getAssets().open("player.js")) {
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-            byte[] buffer = new byte[4096]; int n;
-            while ((n = stream.read(buffer)) != -1) bytes.write(buffer, 0, n);
-            playerScript = new String(bytes.toByteArray(), StandardCharsets.UTF_8);
-        } catch (java.io.IOException e) { throw new IllegalStateException("Missing player asset", e); }
+        playerScript = readAsset("player.js");
+        searchScript = readAsset("search.js");
         root = new FrameLayout(this);
         root.setBackgroundColor(0xff0d1526);
         setContentView(root);
@@ -76,6 +79,15 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         catalog.requestFocus();
         inputManager = (InputManager) getSystemService(INPUT_SERVICE);
         inputManager.registerInputDeviceListener(this, handler);
+    }
+
+    private String readAsset(String name) {
+        try (InputStream stream = getAssets().open(name)) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096]; int n;
+            while ((n = stream.read(buffer)) != -1) bytes.write(buffer, 0, n);
+            return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) { throw new IllegalStateException("Missing app asset", e); }
     }
 
     static boolean allowedPlayerUrl(String value) {
@@ -129,14 +141,88 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
             if (slug == null || !slug.matches("[a-z0-9-]{1,100}")) return;
             runOnUiThread(() -> openPlayer("https://sneslive.com/" + slug + "/"));
         }
-        @JavascriptInterface public void searchAll(String query) {
-            if (query == null || query.length() > 200) return;
-            runOnUiThread(() -> {
-                try { openPlayer("https://sneslive.com/?s=" + URLEncoder.encode(query.trim(), "UTF-8")); }
-                catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
-            });
+        @JavascriptInterface public void searchAll(String query, int page, int requestId) {
+            if (query == null || query.trim().isEmpty() || query.length() > 200 || page < 1 || page > 100) return;
+            runOnUiThread(() -> startSearch(query.trim(), page, requestId));
         }
+        @JavascriptInterface public void cancelSearch() { runOnUiThread(() -> stopSearch()); }
         @JavascriptInterface public void help() { runOnUiThread(() -> showHelp()); }
+    }
+
+    void stopSearch() {
+        searchSerial++;
+        if (searchTimeout != null) handler.removeCallbacks(searchTimeout);
+        searchTimeout = null;
+        if (searchWeb != null) {
+            searchWeb.stopLoading();
+            root.removeView(searchWeb); searchWeb.destroy(); searchWeb = null;
+        }
+    }
+
+    void startSearch(String query, int page, int requestId) {
+        stopSearch();
+        final int serial = searchSerial;
+        searchWeb = makeWebView(false);
+        searchWeb.setFocusable(false);
+        searchWeb.setVisibility(View.INVISIBLE);
+        searchWeb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        root.addView(searchWeb, new FrameLayout.LayoutParams(1,1));
+        searchWeb.setWebViewClient(new WebViewClient() {
+            private boolean searchUrl(String value) {
+                if (!allowedPlayerUrl(value)) return false;
+                Uri url = Uri.parse(value);
+                return query.equals(url.getQueryParameter("s")) &&
+                    ("/".equals(url.getPath()) || url.getPath().matches("/page/[0-9]+/?"));
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                return r.isForMainFrame() && !searchUrl(r.getUrl().toString());
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String url) { return !searchUrl(url); }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (view != searchWeb || serial != searchSerial) return;
+                if (!searchUrl(url)) { searchFailed(serial, query, page, requestId); return; }
+                view.evaluateJavascript(searchScript, answer -> {
+                    if (serial != searchSerial || view != searchWeb) return;
+                    try {
+                        if (answer == null || answer.length() > 65000) throw new JSONException("Search response too large");
+                        JSONObject result = new JSONObject(answer);
+                        if (!result.optBoolean("valid")) throw new JSONException("Search results unavailable");
+                        JSONArray raw = result.getJSONArray("games"), safe = new JSONArray();
+                        for (int i=0; i<Math.min(raw.length(),60); i++) {
+                            JSONArray row = raw.optJSONArray(i);
+                            if (row == null || row.length() < 2) continue;
+                            String title = row.optString(0,""), slug = row.optString(1,"");
+                            if (title.isEmpty() || title.length()>160 || !slug.matches("[a-z0-9-]{1,100}")) continue;
+                            safe.put(new JSONArray().put(title).put(slug).put("Online game"));
+                        }
+                        deliverSearch(serial, query, page, requestId, safe, result.optBoolean("more"), "");
+                    } catch (JSONException invalid) { searchFailed(serial, query, page, requestId); }
+                });
+            }
+            @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
+                if (r.isForMainFrame()) searchFailed(serial, query, page, requestId);
+            }
+            @Override public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse e) {
+                if (r.isForMainFrame()) searchFailed(serial, query, page, requestId);
+            }
+        });
+        searchTimeout = () -> searchFailed(serial, query, page, requestId);
+        handler.postDelayed(searchTimeout, 30000);
+        try {
+            String path = page == 1 ? "/" : "/page/" + page + "/";
+            searchWeb.loadUrl("https://sneslive.com" + path + "?s=" + URLEncoder.encode(query,"UTF-8"));
+        } catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
+    }
+
+    private void searchFailed(int serial, String query, int page, int requestId) {
+        deliverSearch(serial, query, page, requestId, new JSONArray(), false,
+            "Online search is unavailable. Check internet and try again, or choose a featured game.");
+    }
+    private void deliverSearch(int serial, String query, int page, int requestId, JSONArray rows, boolean more, String error) {
+        if (serial != searchSerial) return;
+        stopSearch();
+        catalog.evaluateJavascript("window.SnesCatalog && SnesCatalog.receiveSearch(" + requestId + "," +
+            JSONObject.quote(query) + "," + page + "," + rows + "," + more + "," + JSONObject.quote(error) + ")", null);
     }
 
     private class PlayerClient extends WebViewClient {
@@ -174,13 +260,14 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     }
 
     private void fail(String message) {
-        pendingPlay = false; bridgeReady = false; setGameMode(false);
+        pendingPlay = false; setGameMode(false); bridgeReady = false;
         setStatus(message);
         handler.removeCallbacks(pollPlayer);
     }
 
     void openPlayer(String url) {
         if (!allowedPlayerUrl(url)) return;
+        stopSearch();
         if (playerPanel != null) { player.loadUrl(url); requestPlay(); return; }
         playerPanel = new LinearLayout(this);
         playerPanel.setOrientation(LinearLayout.VERTICAL);
@@ -253,11 +340,16 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
                 if ("\"ready\"".equals(answer)) {
                     if (pendingPlay) { pendingPlay = false; setGameMode(true); }
                     else if (!gameMode) setStatus("Player ready. Select Start / Focus for game controls.");
+                } else if ("\"failed\"".equals(answer)) {
+                    fail("The online emulator failed to start. Choose Reload or Games to try another title.");
+                    return;
                 } else if (pendingPlay && SystemClock.uptimeMillis() > playDeadline) {
                     pendingPlay = false;
-                    setStatus("Player did not become ready. Use the page controls, Reload, or Open browser.");
+                    setStatus("Player did not become ready. Choose Reload or Games to try another title.");
                     setGameMode(false);
-                } else if (pendingPlay) setStatus("Waiting for the site's player. Menu opens app controls.");
+                } else if (pendingPlay) setStatus("\"preroll\"".equals(answer) ?
+                    "The site's pre-roll is running. The player will start afterward. Menu opens controls." :
+                    "Starting the online player… Menu opens app controls.");
                 if (player != null) handler.postDelayed(this, 1000);
             });
         }
@@ -394,6 +486,10 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     }
     @Override protected void onPause() {
         paused = true; pendingPlay = false;
+        if (searchWeb != null) {
+            stopSearch();
+            catalog.evaluateJavascript("window.SnesCatalog && SnesCatalog.cancelPending()", null);
+        }
         inputs.releaseAll(); stopNavigation(); handler.removeCallbacks(pollPlayer);
         evaluate("window.SnesTV && SnesTV.suspend()"); setGameMode(false);
         if (player != null) player.onPause();
@@ -411,6 +507,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         if (!focused) { inputs.releaseAll(); stopNavigation(); evaluate("window.SnesTV && SnesTV.release()"); }
     }
     @Override protected void onDestroy() {
+        stopSearch();
         handler.removeCallbacksAndMessages(null); inputs.releaseAll();
         if (inputManager != null) inputManager.unregisterInputDeviceListener(this);
         closeFullscreen();

@@ -68,6 +68,20 @@ public class SmokeInstrumentation extends Instrumentation {
             check("true".equals(js(true, "document.activeElement.dataset.slug==='donkey-kong-country'")), "left stick browses catalog");
             js(true, "document.getElementById('search').value='Zelda';document.getElementById('search').dispatchEvent(new Event('input'));true");
             check("1".equals(js(true, "document.querySelectorAll('.game').length")), "local game search filters results");
+            js(true, "document.getElementById('search').value='Alien';document.getElementById('search').dispatchEvent(new Event('input'));document.getElementById('all').click();true");
+            long searchDeadline = SystemClock.uptimeMillis()+10000;
+            while (activity.searchWeb == null && SystemClock.uptimeMillis()<searchDeadline) SystemClock.sleep(20);
+            check(activity.searchWeb != null && activity.player == null, "online search stays in catalog instead of opening website");
+            String searchFixture = "<!doctype html><html><body><main class='main-cn'><ul class='lst-gams cate-grid'>" +
+                "<li><div class='gm-titl'><a href='https://sneslive.com/alien-3/'>Alien 3</a>" +
+                "<a href='https://evil.test/escape/'>Unsafe</a></div></li></ul></main>" +
+                "<script>if(typeof SnesApp!=='undefined')document.querySelector('a').textContent='UNSAFE BRIDGE';</script></body></html>";
+            runOnMainSync(() -> { activity.searchWeb.stopLoading(); activity.searchWeb.loadDataWithBaseURL(
+                "https://sneslive.com/?s=Alien", searchFixture, "text/html", "UTF-8", null); });
+            waitFor(true, "document.querySelectorAll('.game').length===1 && document.querySelector('.game').dataset.slug==='alien-3'");
+            check("true".equals(js(true,"document.querySelector('.game b').textContent==='Alien 3'")), "search WebView has no privileged bridge and safely returns online results");
+            check(activity.searchWeb == null, "search WebView is destroyed after delivering results");
+            check("true".equals(js(true,"document.activeElement.dataset.slug==='alien-3'")), "online result receives TV focus");
             js(true, "SnesApp.play('super-mario-world');true");
             long deadline = SystemClock.uptimeMillis()+15000;
             while (activity.player == null && SystemClock.uptimeMillis()<deadline) SystemClock.sleep(100);
@@ -85,6 +99,7 @@ public class SmokeInstrumentation extends Instrumentation {
             waitFor(false, "!!window.SnesTV && SnesTV.ready()");
             runOnMainSync(() -> activity.setGameMode(true));
             js(false, "events=[];true");
+            check("true".equals(js(false,"document.documentElement.classList.contains('snes-tv-playing')")), "native game mode enables full-screen player layout");
             check("\"undefined\"".equals(js(false, "typeof SnesApp")), "external player has no privileged Android bridge");
             int[] codes = {96,97,99,100,102,103,108,109,19,20,21,22,23,85,89,90};
             int[] buttons = {0,8,1,9,10,11,3,2,4,5,6,7,0,3,1,8};

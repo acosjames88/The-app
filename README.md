@@ -13,7 +13,7 @@ export ANDROID_HOME=/path/to/android-sdk
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-Installable output: `app/build/outputs/apk/debug/app-debug.apk`. Version 1.1.0 (code 2), package `com.retrosearch.play`, min SDK 23, target SDK 35. The APK is debug-signed for sideload testing.
+Installable output: `app/build/outputs/apk/debug/app-debug.apk`. Version 1.2.0 (code 2), package `com.retrosearch.play`, min SDK 23, target SDK 35. The APK is debug-signed for sideload testing.
 
 ## Controls
 
@@ -81,3 +81,9 @@ The local catalog's Android bridge is isolated from network navigation. External
 Independent project; not affiliated with SNESLive, Amazon, Nintendo, Microsoft, or Sony. Use games you have permission to access.
 
 Device reference: https://developer.amazon.com/docs/device-specs/device-specifications-fire-tv-streaming-media-player.html
+
+## Version 1.2.0
+
+Full-collection search now returns game cards in the app rather than opening a website search page. A separate, temporary WebView reads only the main search results and exposes no Android JavascriptInterface. Query changes cancel stale searches; pages and network errors stay in the app. The selected online game still loads SNESLive's normal player and pre-roll. Once the runtime is ready, its game container fills the screen. Emulator startup errors are reported immediately.
+
+The app and its synthetic tests do not prove live gameplay. In the October 28, 2026 cloud-browser check, Super Mario World reached the emulator but failed with a WebGL context error (GLctx). This does not establish Fire TV behavior. Physical Fire TV playback, audio, performance, and Bluetooth controller pairing remain unverified. No ROMs or emulator binaries are included.
