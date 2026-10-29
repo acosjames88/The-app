@@ -1,8 +1,8 @@
-/* Runs only in a SNESLive page. No Android JavascriptInterface is exposed here. */
+/* Runs in the app-owned game document. No Android JavascriptInterface is exposed here. */
 (function () {
     'use strict';
     if (window.SnesTV) return;
-    var held = {}, ownedEngine = null, originalInput = null;
+    var held = {}, ownedEngine = null, originalInput = null, requestedButton = null;
     function engine() {
         var e = window.EJS_emulator;
         return e && e.started && e.gameManager &&
@@ -73,18 +73,12 @@
                 if (e.paused && typeof e.play === 'function') e.play();
                 focus(); return 'ready';
             }
-            // Let the site's pre-roll finish normally. Never click advertisement links or skip controls.
-            var ad = document.querySelector('[id^="cpmstar_modalVideoPopup_"]');
-            if (visible(ad)) {
-                var video = ad.querySelector('video');
-                if (video && video.paused) {
-                    try { var playback = video.play(); if (playback) playback.catch(function () {}); } catch (_) {}
-                }
-                return 'preroll';
-            }
-            // Click only the site's visible emulator start button; respect its loading/ad flow.
+            // The app-owned document has no website ad flow. Activate only its emulator control.
             var button = document.querySelector('.ejs_start_button, .ejs_start');
-            if (visible(button)) { button.click(); return 'starting'; }
+            if (visible(button)) {
+                if (requestedButton !== button) { requestedButton = button; button.click(); }
+                return 'starting';
+            }
             return 'waiting';
         },
         active: setActive,

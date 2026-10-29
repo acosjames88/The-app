@@ -2,8 +2,6 @@ package com.retrosearch.play;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
-import android.content.ActivityNotFoundException;
 import android.graphics.Color;
 import android.hardware.input.InputManager;
 import android.net.Uri;
@@ -33,6 +31,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
@@ -58,6 +59,10 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     private int navigation, navDirection;
     private String playerScript = "";
     private String searchScript = "";
+    private String playerTemplate = "";
+    private String playerUserAgent = "";
+    interface PageSource { String load(String url, String userAgent) throws IOException; }
+    volatile PageSource pageSource = MainActivity::downloadGamePage;
     WebView searchWeb;
     interface SearchLoader { void load(WebView view, String url); }
     SearchLoader searchLoader = WebView::loadUrl;
@@ -71,6 +76,8 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
         playerScript = readAsset("player.js");
         searchScript = readAsset("search.js");
+        playerTemplate = readAsset("game.html");
+        playerUserAgent = WebSettings.getDefaultUserAgent(this);
         root = new FrameLayout(this);
         root.setBackgroundColor(0xff0d1526);
         setContentView(root);
@@ -132,7 +139,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
             });
         } else {
             CookieManager.getInstance().setAcceptCookie(true);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
             web.setWebViewClient(new PlayerClient());
         }
         return web;
@@ -180,6 +187,10 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
                 return r.isForMainFrame() && !searchUrl(r.getUrl().toString());
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v, String url) { return !searchUrl(url); }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                // Search uses only the main document's links. Do not load ads, scripts, or media.
+                return r.isForMainFrame() && searchUrl(r.getUrl().toString()) ? null : blockedResource();
+            }
             @Override public void onPageFinished(WebView view, String url) {
                 if (view != searchWeb || serial != searchSerial) return;
                 if (!searchUrl(url)) { searchFailed(serial, query, page, requestId); return; }
@@ -227,21 +238,69 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
             JSONObject.quote(query) + "," + page + "," + rows + "," + more + "," + JSONObject.quote(error) + ")", null);
     }
 
-    private class PlayerClient extends WebViewClient {
+    static WebResourceResponse blockedResource() {
+        return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
+    }
+
+    static String downloadGamePage(String initialUrl, String userAgent) throws IOException {
+        String url = initialUrl;
+        for (int redirect = 0; redirect < 4; redirect++) {
+            if (!AdFreePlayer.gamePage(url)) throw new IOException("Invalid game page");
+            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(15000); connection.setReadTimeout(15000);
+            connection.setRequestProperty("User-Agent", userAgent);
+            connection.setRequestProperty("Accept", "text/html");
+            try {
+                int code = connection.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String location = connection.getHeaderField("Location");
+                    if (location == null) throw new IOException("Invalid redirect");
+                    url = new URL(new URL(url), location).toExternalForm();
+                    continue;
+                }
+                if (code != 200) throw new IOException("Game page unavailable");
+                java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                try (InputStream stream = connection.getInputStream()) {
+                    byte[] buffer = new byte[8192]; int n;
+                    while ((n = stream.read(buffer)) != -1) {
+                        if (bytes.size() + n > 2 * 1024 * 1024 || Thread.currentThread().isInterrupted())
+                            throw new IOException("Game page too large or canceled");
+                        bytes.write(buffer, 0, n);
+                    }
+                }
+                return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+            } finally { connection.disconnect(); }
+        }
+        throw new IOException("Too many redirects");
+    }
+
+    class PlayerClient extends WebViewClient {
+        @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            String url = request.getUrl().toString();
+            if (!request.isForMainFrame()) return AdFreePlayer.allowedAsset(url) ? null : blockedResource();
+            String document;
+            try {
+                if (!"GET".equals(request.getMethod()) || !AdFreePlayer.gamePage(url)) throw new IOException("Invalid page");
+                document = AdFreePlayer.document(pageSource.load(url, playerUserAgent), url, playerTemplate);
+            } catch (IOException | IllegalArgumentException unavailable) { document = AdFreePlayer.errorDocument(); }
+            return new WebResourceResponse("text/html", "UTF-8",
+                new ByteArrayInputStream(document.getBytes(StandardCharsets.UTF_8)));
+        }
         @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             if (!request.isForMainFrame()) return false;
             return blockNavigation(request.getUrl().toString());
         }
         @Override public boolean shouldOverrideUrlLoading(WebView view, String url) { return blockNavigation(url); }
         private boolean blockNavigation(String url) {
-            if (allowedPlayerUrl(url)) return false;
-            Toast.makeText(MainActivity.this, "External link blocked. Use Open browser to leave SNESLive.", Toast.LENGTH_SHORT).show();
+            if (AdFreePlayer.gamePage(url)) return false;
+            Toast.makeText(MainActivity.this, "Use Games to choose a game.", Toast.LENGTH_SHORT).show();
             return true;
         }
         @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
             navigation++; bridgeReady = false; setGameMode(false);
             handler.removeCallbacks(pollPlayer);
-            setStatus("Loading SNESLive…");
+            setStatus("Loading game…");
         }
         @Override public void onPageFinished(WebView view, String url) {
             if (view != player || !allowedPlayerUrl(url)) return;
@@ -257,7 +316,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
             if (r.isForMainFrame()) fail("Page unavailable. Check internet, then Reload.");
         }
         @Override public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse e) {
-            if (r.isForMainFrame()) fail("SNESLive returned HTTP " + e.getStatusCode() + ". Try Reload or Open browser.");
+            if (r.isForMainFrame()) fail("Game unavailable. Choose Reload or Games.");
         }
     }
 
@@ -268,7 +327,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
     }
 
     void openPlayer(String url) {
-        if (!allowedPlayerUrl(url)) return;
+        if (!AdFreePlayer.gamePage(url)) return;
         stopSearch();
         if (playerPanel != null) { player.loadUrl(url); requestPlay(); return; }
         playerPanel = new LinearLayout(this);
@@ -286,7 +345,6 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
                 "Center B · Rewind Y · Forward A · Play Start", Toast.LENGTH_LONG).show();
         });
         addButton("Controls", this::showHelp);
-        addButton("Open browser", this::openBrowser);
         playerPanel.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(60)));
         status = new TextView(this);
         status.setTextColor(0xffb7d2ea); status.setTextSize(13);
@@ -349,9 +407,7 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
                     pendingPlay = false;
                     setStatus("Player did not become ready. Choose Reload or Games to try another title.");
                     setGameMode(false);
-                } else if (pendingPlay) setStatus("\"preroll\"".equals(answer) ?
-                    "The site's pre-roll is running. The player will start afterward. Menu opens controls." :
-                    "Starting the online player… Menu opens app controls.");
+                } else if (pendingPlay) setStatus("Starting game… Menu opens app controls.");
                 if (player != null) handler.postDelayed(this, 1000);
             });
         }
@@ -370,11 +426,6 @@ public class MainActivity extends Activity implements InputManager.InputDeviceLi
         pendingPlay = false;
         closeFullscreen(); setGameMode(false);
         if (playButton != null) playButton.requestFocus();
-    }
-    private void openBrowser() {
-        if (player == null || !allowedPlayerUrl(player.getUrl())) return;
-        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(player.getUrl()))); }
-        catch (ActivityNotFoundException e) { Toast.makeText(this, "No browser is installed", Toast.LENGTH_LONG).show(); }
     }
     private void showHelp() {
         if (player != null) showToolbar();

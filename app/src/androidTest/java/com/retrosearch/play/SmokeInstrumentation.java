@@ -54,6 +54,14 @@ public class SmokeInstrumentation extends Instrumentation {
             activity.dispatchGenericMotionEvent(e); e.recycle();
         });
     }
+    private String asset(String name) throws Exception {
+        try (java.io.InputStream input=getTargetContext().getAssets().open(name)) {
+            java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();
+            byte[] buffer=new byte[4096];int n;
+            while((n=input.read(buffer))!=-1)bytes.write(buffer,0,n);
+            return new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
@@ -81,21 +89,31 @@ public class SmokeInstrumentation extends Instrumentation {
             check("true".equals(js(true,"document.querySelector('.game b').textContent==='Alien 3'")), "search WebView has no privileged bridge and safely returns online results");
             check(activity.searchWeb == null, "search WebView is destroyed after delivering results");
             check("true".equals(js(true,"document.activeElement.dataset.slug==='alien-3'")), "online result receives TV focus");
+            runOnMainSync(() -> activity.pageSource = (url,userAgent) -> "<html>Unavailable source: do not display this website</html>");
             js(true, "SnesApp.play('super-mario-world');true");
             long deadline = SystemClock.uptimeMillis()+15000;
             while (activity.player == null && SystemClock.uptimeMillis()<deadline) SystemClock.sleep(100);
             check(activity.player != null, "catalog selection opens native player directly");
+            waitFor(false,"!!document.getElementById('game') && document.getElementById('game').textContent.includes('Failed to download game')");
+            check("true".equals(js(false,"!document.body.textContent.includes('do not display this website')")), "missing game metadata fails closed without displaying original website");
             check(MainActivity.allowedPlayerUrl("https://sneslive.com/super-mario-world/"), "SNESLive URL allowed");
             check(!MainActivity.allowedPlayerUrl("https://sneslive.com.evil.test/") &&
                 !MainActivity.allowedPlayerUrl("https://sneslive.com@evil.test/") &&
                 !MainActivity.allowedPlayerUrl("file:///etc/passwd") &&
                 !MainActivity.allowedPlayerUrl("http://sneslive.com/"), "external and insecure URLs rejected");
-            String fixture = "<!doctype html><html><body><div id='game'><canvas width='256' height='224'></canvas></div>" +
-                "<script>window.events=[];window.EJS_emulator={started:true,paused:false,gameManager:{simulateInput:function(p,i,v){events.push([p,i,v])}}," +
-                "pause:function(){this.paused=true},play:function(){this.paused=false}};</script></body></html>";
+            String rawSource = "<script>EJS_core='snes';EJS_gameUrl='/emulator/roms/test.smc';</script>" +
+                "<iframe src='https://ads.example.test/video'></iframe><script>window.websiteExecuted=true;</script>";
+            String runtime = "<script>document.getElementById('game').innerHTML=\"<canvas width='256' height='224'></canvas>\";" +
+                "window.events=[];window.EJS_emulator={started:true,paused:false,gameManager:{simulateInput:function(p,i,v){events.push([p,i,v])}}," +
+                "pause:function(){this.paused=true},play:function(){this.paused=false}};</script>";
+            String fixture = AdFreePlayer.document(rawSource,"https://sneslive.com/synthetic-test/",asset("game.html"))
+                .replace("<script src=\"https://sneslive.com/emulator/data/loader.js\" onerror=\"playerDownloadFailed()\"></script>",runtime);
             runOnMainSync(() -> { activity.player.stopLoading(); activity.player.loadDataWithBaseURL(
                 "https://sneslive.com/__synthetic_test__/", fixture, "text/html", "UTF-8", null); });
             waitFor(false, "!!window.SnesTV && SnesTV.ready()");
+            check("true".equals(js(false,"EJS_AdUrl==='' && EJS_startOnLoaded===true && typeof websiteExecuted==='undefined' && !document.querySelector('iframe,video')")), "clean Android player starts without website scripts, ad frames or video");
+            check(!AdFreePlayer.allowedAsset("https://ads.cpmstar.com/video.js") &&
+                AdFreePlayer.allowedAsset("https://sneslive.com/emulator/data/loader.js"), "native player permits emulator assets and blocks advertising hosts");
             runOnMainSync(() -> activity.setGameMode(true));
             js(false, "events=[];true");
             check("true".equals(js(false,"document.documentElement.classList.contains('snes-tv-playing')")), "native game mode enables full-screen player layout");
